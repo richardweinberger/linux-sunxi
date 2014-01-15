@@ -19,6 +19,23 @@
 	compatible = "cubietech,cubietruck", "allwinner,sun7i-a20";
 
 	soc@01c00000 {
+		nfc: nand@01c03000 {
+			pinctrl-names = "default";
+			pinctrl-0 = <&nand_pins_a &nand_cs0_pins_a &nand_rb0_pins_a>;
+			status = "okay";
+
+			nand@0 {
+				#address-cells = <2>;
+				#size-cells = <2>;
+				reg = <0>;
+				allwinner,rb = <0>;
+				nand-ecc-mode = "hw";
+				onfi,nand-timing-mode = <0x1f>;
+				nand-ecc-strength = <40>;
+				nand-ecc-step-size = <1024>;
+			};
+		};
+
 		pinctrl@01c20800 {
 			led_pins_cubietruck: led_pins@0 {
 				allwinner,pins = "PH7", "PH11", "PH20", "PH21";
