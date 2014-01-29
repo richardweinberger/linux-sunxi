@@ -847,6 +847,7 @@ static inline bool nand_is_slc(struct nand_chip *chip)
 	return chip->bits_per_cell == 1;
 }
 
+
 /**
  * struct nand_sdr_timings - SDR NAND chip timings
  *
@@ -894,5 +895,8 @@ struct nand_sdr_timings {
 	u32 tWP_min;
 	u32 tWW_min;
 };
+
+/* convert an ONFI timing mode to its timing characteristics. */
+const struct nand_sdr_timings *onfi_async_timing_mode_to_sdr_timings(int mode);
 
 #endif /* __LINUX_MTD_NAND_H */
