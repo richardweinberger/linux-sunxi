@@ -886,6 +886,23 @@ void nand_del_partition(struct nand_part *part);
 struct nand_part *nandpart_alloc(void);
 
 /**
+ * struct ofnandpart_data - struct used to retrieve NAND partitions from a DT
+ *			    node
+ * @parse:		driver specific parser function
+ * @priv:		driver private data
+ * @node:		OF node containing NAND partitions
+ */
+struct ofnandpart_data {
+	struct nand_part *(*parse)(void *priv, struct mtd_info *master,
+				   struct device_node *pp);
+	void *priv;
+	struct device_node *node;
+};
+
+int ofnandpart_parse(struct mtd_info *master,
+		     const struct ofnandpart_data *data);
+
+/**
  * struct nand_sdr_timings - SDR NAND chip timings
  *
  * This struct defines the timing requirements of a SDR NAND chip.
