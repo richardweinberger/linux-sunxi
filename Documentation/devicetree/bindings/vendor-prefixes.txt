@@ -112,3 +112,4 @@ wlf	Wolfson Microelectronics
 wm	Wondermedia Technologies, Inc.
 xes	Extreme Engineering Solutions (X-ES)
 xlnx	Xilinx
+x-powers	X-Powers
