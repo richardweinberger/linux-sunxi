@@ -1,0 +1,83 @@
+* axp20x device tree bindings
+
+The axp20x family current members :-
+axp202 (X-Powers)
+axp209 (X-Powers)
+
+Required properties:
+- compatible 			: Should be "x-powers,axp202" or "x-powers,axp209"
+- interrupt-controller 		: axp20x has its own internal IRQs
+- #interrupt-cells 		: Should be set to 1
+- interrupt-parent 		: The parent interrupt controller
+- interrupts 			: Interrupt specifiers for interrupt sources
+- reg 				: The I2C slave address for the AXP chip
+
+Sub-nodes:
+* regulators : Contain the regulator nodes. The regulators are bound using
+	       their name as listed here: dcdc2, dcdc3, ldo1, ldo2, ldo3,
+	       ldo4, ldo5.
+	       The bindings details of individual regulator device can be found in:
+	       Documentation/devicetree/bindings/regulator/regulator.txt with the
+	       exception of:
+
+	- x-powers,dcdc-freq	: defines the work frequency of DC-DC in KHz
+				  (range: 750-1875). Default: 1.5MHz
+
+	For each DCDC:
+		- x-powers,dcdc-workmode: Optional. 1 for PWM mode, 0 for AUTO mode
+				  	  Default: AUTO mode
+
+Example:
+
+axp: axp20x@34 {
+	reg = <0x34>;
+	interrupt-parent = <&nmi_intc>;
+	interrupts = <0 8>;
+
+	compatible = "x-powers,axp209";
+	interrupt-controller;
+	#interrupt-cells = <1>;
+
+	regulators {
+		dcdc-freq = <1500>;
+
+		axp_dcdc2: dcdc2 {
+			regulator-min-microvolt = <700000>;
+			regulator-max-microvolt = <2275000>;
+			regulator-always-on;
+		};
+
+		axp_dcdc3: dcdc3 {
+			regulator-min-microvolt = <700000>;
+			regulator-max-microvolt = <3500000>;
+			regulator-always-on;
+		};
+
+		axp_ldo1: ldo1 {
+			regulator-min-microvolt = <1300000>;
+			regulator-max-microvolt = <1300000>;
+		};
+
+		axp_ldo2: ldo2 {
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <3300000>;
+			regulator-always-on;
+		};
+
+		axp_ldo3: ldo3 {
+			regulator-min-microvolt = <700000>;
+			regulator-max-microvolt = <3500000>;
+		};
+
+		axp_ldo4: ldo4 {
+			regulator-min-microvolt = <1250000>;
+			regulator-max-microvolt = <3300000>;
+		};
+
+		axp_ldo5: ldo5 {
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <3300000>;
+		};
+	};
+};
+
