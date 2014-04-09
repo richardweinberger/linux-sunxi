@@ -237,6 +237,12 @@
 			reg = <0x01c202c0 0xc>;
 		};
 
+		apb0_rst: reset@01f014b0 {
+			#reset-cells = <1>;
+			compatible = "allwinner,sun6i-a31-clock-reset";
+			reg = <0x01f014b0 0x4>;
+		};
+
 		apb1_rst: reset@01c202d0 {
 			#reset-cells = <1>;
 			compatible = "allwinner,sun6i-a31-clock-reset";
