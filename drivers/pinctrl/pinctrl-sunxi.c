@@ -26,6 +26,7 @@
 #include <linux/pinctrl/pinconf-generic.h>
 #include <linux/pinctrl/pinmux.h>
 #include <linux/platform_device.h>
+#include <linux/reset.h>
 #include <linux/slab.h>
 
 #include "core.h"
@@ -878,6 +879,7 @@ static int sunxi_pinctrl_probe(struct platform_device *pdev)
 	const struct of_device_id *device;
 	struct pinctrl_pin_desc *pins;
 	struct sunxi_pinctrl *pctl;
+	struct reset_control *rstc;
 	int i, ret, last_pin;
 	struct clk *clk;
 
@@ -903,6 +905,14 @@ static int sunxi_pinctrl_probe(struct platform_device *pdev)
 			return PTR_ERR(clk);
 
 		ret = clk_prepare_enable(clk);
+		if (ret)
+			return ret;
+
+		rstc = devm_reset_control_get(&pdev->dev, NULL);
+		if (IS_ERR(rstc))
+			return PTR_ERR(rstc);
+
+		ret = reset_control_deassert(rstc);
 		if (ret)
 			return ret;
 	} else {
