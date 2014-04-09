@@ -898,6 +898,13 @@ static int sunxi_pinctrl_probe(struct platform_device *pdev)
 			return -ENOMEM;
 
 		pctl->get_membase = sun6i_a31_pinctrl_get_membase;
+		clk = devm_clk_get(&pdev->dev, "pioL_clk");
+		if (IS_ERR(clk))
+			return PTR_ERR(clk);
+
+		ret = clk_prepare_enable(clk);
+		if (ret)
+			return ret;
 	} else {
 		pctl->get_membase = sunxi_pinctrl_get_membase;
 	}
