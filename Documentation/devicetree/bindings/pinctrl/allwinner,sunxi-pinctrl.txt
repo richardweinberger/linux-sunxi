@@ -14,6 +14,12 @@ Required properties:
   "allwinner,sun7i-a20-pinctrl"
 - reg: Should contain the register physical address and length for the
   pin controller.
+- clocks: Should contain a list of gate clk needed by the pin controller.
+- clock-names: Should at least contain "pio_clk" which is used by the
+  base pin controller. In case of sun6i-a31 SoC, this property should
+  also contain the "pioL_clk" string.
+  Elements in clock-names and clocks properties should be coherent (i.e.:
+  the first element in clock-names refers to the first element in clocks).
 
 Please refer to pinctrl-bindings.txt in this directory for details of the
 common pinctrl bindings used by client devices.
