@@ -431,7 +431,7 @@ struct sunxi_pinctrl_group {
 };
 
 struct sunxi_pinctrl {
-	void __iomem			*membase;
+	void __iomem			*membase[2];
 	struct gpio_chip		*chip;
 	struct sunxi_pinctrl_desc	*desc;
 	struct device			*dev;
@@ -444,6 +444,9 @@ struct sunxi_pinctrl {
 	int				irq_array[SUNXI_IRQ_NUMBER];
 	spinlock_t			lock;
 	struct pinctrl_dev		*pctl_dev;
+	void __iomem * (*get_membase)(struct sunxi_pinctrl *pctl,
+				      unsigned pin_num,
+				      unsigned *rel_pin_num);
 };
 
 #define SUNXI_PIN(_pin, ...)					\
