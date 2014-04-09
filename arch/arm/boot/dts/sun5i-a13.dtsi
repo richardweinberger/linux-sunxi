@@ -286,6 +286,7 @@
 			reg = <0x01c20800 0x400>;
 			interrupts = <28>;
 			clocks = <&apb0_gates 5>;
+			clock-names = "pio_clk";
 			gpio-controller;
 			interrupt-controller;
 			#address-cells = <1>;
