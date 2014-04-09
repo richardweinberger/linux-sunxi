@@ -141,6 +141,16 @@
 					"ahb1_drc0", "ahb1_drc1";
 		};
 
+		apb0_gates: apb0_gates@01f01428 {
+			#clock-cells = <1>;
+			compatible = "allwinner,sun6i-a31-apb0-gates-clk";
+			reg = <0x01f01428 0x4>;
+			clock-output-names = "apb0_pio", "apb0_ir",
+					"apb0_timer01", "apb0_p2wi",
+					"apb0_uart", "apb0_1wire",
+					"apb0_i2c";
+		};
+
 		apb1: apb1@01c20054 {
 			#clock-cells = <0>;
 			compatible = "allwinner,sun4i-apb0-clk";
