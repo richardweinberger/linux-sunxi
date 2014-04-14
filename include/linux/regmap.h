@@ -323,6 +323,13 @@ struct regmap_bus {
 	enum regmap_endian val_format_endian_default;
 };
 
+enum regmap_smbus_transfer_type {
+	REGMAP_SMBUS_BYTE_TRANSFER,
+	REGMAP_SMBUS_WORD_TRANSFER,
+	REGMAP_SMBUS_BLOCK_TRANSFER,
+	REGMAP_SMBUS_I2C_BLOCK_TRANSFER,
+};
+
 struct regmap *regmap_init(struct device *dev,
 			   const struct regmap_bus *bus,
 			   void *bus_context,
@@ -331,6 +338,9 @@ int regmap_attach_dev(struct device *dev, struct regmap *map,
 				 const struct regmap_config *config);
 struct regmap *regmap_init_i2c(struct i2c_client *i2c,
 			       const struct regmap_config *config);
+struct regmap *regmap_init_smbus(struct i2c_client *i2c,
+				const struct regmap_config *config,
+				enum regmap_smbus_transfer_type transfer_type);
 struct regmap *regmap_init_spi(struct spi_device *dev,
 			       const struct regmap_config *config);
 struct regmap *regmap_init_spmi_base(struct spmi_device *dev,
@@ -347,6 +357,9 @@ struct regmap *devm_regmap_init(struct device *dev,
 				const struct regmap_config *config);
 struct regmap *devm_regmap_init_i2c(struct i2c_client *i2c,
 				    const struct regmap_config *config);
+struct regmap *devm_regmap_init_smbus(struct i2c_client *i2c,
+				const struct regmap_config *config,
+				enum regmap_smbus_transfer_type transfer_type);
 struct regmap *devm_regmap_init_spi(struct spi_device *dev,
 				    const struct regmap_config *config);
 struct regmap *devm_regmap_init_spmi_base(struct spmi_device *dev,
