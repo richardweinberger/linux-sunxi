@@ -300,6 +300,13 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 			#gpio-cells = <3>;
+
+			p2wi_pins_a: p2wi@0 {
+				allwinner,pins = "PL0", "PL1";
+				allwinner,function = "s_p2wi";
+				allwinner,drive = <0>;
+				allwinner,pull = <0>;
+			};
 		};
 
 		ahb1_rst: reset@01c202c0 {
@@ -550,6 +557,16 @@
 				compatible = "allwinner,sun6i-a31-clock-reset";
 				#reset-cells = <1>;
 			};
+		};
+
+		p2wi: i2c@01f03400 {
+			compatible = "allwinner,sun6i-a31-p2wi";
+			reg = <0x01f03400 0x400>;
+			interrupts = <0 39 4>;
+			clocks = <&apb0_gates 3>;
+			clock-frequency = <100000>;
+			resets = <&apb0_rst 3>;
+			status = "disabled";
 		};
 	};
 };
