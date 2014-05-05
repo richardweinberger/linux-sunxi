@@ -1,0 +1,108 @@
+/*
+ * Copyright 2014 Boris Brezillon
+ *
+ * Maxime Ripard <boris.brezillon@free-electrons.com>
+ *
+ * The code contained herein is licensed under the GNU General Public
+ * License. You may obtain a copy of the GNU General Public License
+ * Version 2 or later at the following locations:
+ *
+ * http://www.opensource.org/licenses/gpl-license.html
+ * http://www.gnu.org/copyleft/gpl.html
+ */
+
+/dts-v1/;
+/include/ "sun6i-a31.dtsi"
+
+/ {
+	model = "Allwinner A31 APP4 EVB1 Evaluation Board";
+	compatible = "allwinner,app4-evb1", "allwinner,sun6i-a31";
+
+	chosen {
+		bootargs = "earlyprintk console=ttyS0,115200";
+	};
+
+	soc@01c00000 {
+		uart0: serial@01c28000 {
+			pinctrl-names = "default";
+			pinctrl-0 = <&uart0_pins_a>;
+			status = "okay";
+		};
+
+		p2wi: i2c@01f03400 {
+			pinctrl-names = "default";
+			pinctrl-0 = <&p2wi_pins_a>;
+			status = "okay";
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			axp221: pmic@68 {
+				compatible = "x-powers,axp221";
+				reg = <0x68>;
+				interrupt-parent = <&nmi_intc>;
+				interrupts = <0 8>;
+
+				interrupt-controller;
+				#interrupt-cells = <1>;
+
+				acin-supply = <&axp_ipsout_reg>;
+				vin2-supply = <&axp_ipsout_reg>;
+				vin3-supply = <&axp_ipsout_reg>;
+				ldo24in-supply = <&axp_ipsout_reg>;
+				ldo3in-supply = <&axp_ipsout_reg>;
+				ldo5in-supply = <&axp_ipsout_reg>;
+
+				regulators {
+					compatible = "x-powers,axp20x-reg";
+
+					x-powers,dcdc-freq = <1500>;
+
+					axp_ipsout_reg: axp_ipsout {
+						compatible = "regulator-fixed";
+						regulator-name = "axp-ipsout";
+						regulator-min-microvolt = <5000000>;
+						regulator-max-microvolt = <5000000>;
+						regulator-always-on;
+					};
+
+					axp_vcore_reg: dcdc2 {
+						regulator-min-microvolt = <700000>;
+						regulator-max-microvolt = <2275000>;
+						regulator-always-on;
+					};
+
+					axp_ddr_reg: dcdc3 {
+						regulator-min-microvolt = <700000>;
+						regulator-max-microvolt = <3500000>;
+						regulator-always-on;
+					};
+
+					axp_rtc_reg: ldo1 {
+						regulator-always-on;
+					};
+
+					axp_analog_reg: ldo2 {
+						regulator-min-microvolt = <1800000>;
+						regulator-max-microvolt = <3300000>;
+						regulator-always-on;
+					};
+
+					axp_pll_reg: ldo3 {
+						regulator-min-microvolt = <700000>;
+						regulator-max-microvolt = <3500000>;
+					};
+
+					axp_hdmi_reg: ldo4 {
+						regulator-min-microvolt = <1250000>;
+						regulator-max-microvolt = <3300000>;
+					};
+
+					axp_mic_reg: ldo5 {
+						regulator-min-microvolt = <1800000>;
+						regulator-max-microvolt = <3300000>;
+					};
+				};
+			};
+		};
+	};
+};
