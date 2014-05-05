@@ -14,6 +14,7 @@
 enum {
 	AXP202_ID = 0,
 	AXP209_ID,
+	AXP221_ID,
 };
 
 #define AXP20X_DATACACHE(m)		(0x04 + (m))
