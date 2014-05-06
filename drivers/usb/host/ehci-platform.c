@@ -86,10 +86,16 @@ static int ehci_platform_power_on(struct platform_device *dev)
 			goto err_disable_clks;
 	}
 
+	if (priv->rst) {
+		ret = reset_control_deassert(priv->rst);
+		if (ret)
+			goto err_assert_rst;
+	}
+
 	if (priv->phy) {
 		ret = phy_init(priv->phy);
 		if (ret)
-			goto err_disable_clks;
+			goto err_assert_rst;
 
 		ret = phy_power_on(priv->phy);
 		if (ret)
@@ -100,6 +106,9 @@ static int ehci_platform_power_on(struct platform_device *dev)
 
 err_exit_phy:
 	phy_exit(priv->phy);
+err_assert_rst:
+	if (priv->rst)
+		reset_control_assert(priv->rst);
 err_disable_clks:
 	while (--clk >= 0)
 		clk_disable_unprepare(priv->clks[clk]);
@@ -121,6 +130,9 @@ static void ehci_platform_power_off(struct platform_device *dev)
 	for (clk = EHCI_MAX_CLKS - 1; clk >= 0; clk--)
 		if (priv->clks[clk])
 			clk_disable_unprepare(priv->clks[clk]);
+
+	if (priv->rst)
+		reset_control_assert(priv->rst);
 }
 
 static struct hc_driver __read_mostly ehci_platform_hc_driver;
@@ -207,6 +219,14 @@ static int ehci_platform_probe(struct platform_device *dev)
 				priv->clks[clk] = NULL;
 				break;
 			}
+		}
+
+		priv->rst = devm_reset_control_get_optional(&dev->dev,
+							    NULL);
+		if (IS_ERR(priv->rst)) {
+			if (PTR_ERR(priv->rst) == -EPROBE_DEFER)
+				goto err_put_clks;
+			priv->rst = NULL;
 		}
 	}
 
