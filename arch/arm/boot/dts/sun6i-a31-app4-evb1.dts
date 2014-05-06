@@ -23,6 +23,24 @@
 	};
 
 	soc@01c00000 {
+		pio: pinctrl@01c20800 {
+			usb1_vbus_pin_a: usb1_vbus_pin@0 {
+				allwinner,pins = "PH27";
+				allwinner,function = "gpio_out";
+				allwinner,drive = <0>;
+				allwinner,pull = <0>;
+                        };
+		};
+
+		usbphy: phy@01c19400 {
+			usb1_vbus-supply = <&reg_usb1_vbus>;
+			status = "okay";
+		};
+
+		ehci0: usb@01c1a000 {
+			status = "okay";
+		};
+
 		uart0: serial@01c28000 {
 			pinctrl-names = "default";
 			pinctrl-0 = <&uart0_pins_a>;
@@ -105,4 +123,17 @@
 			};
 		};
 	};
+
+	reg_usb1_vbus: usb1-vbus {
+		compatible = "regulator-fixed";
+		pinctrl-names = "default";
+		pinctrl-0 = <&usb1_vbus_pin_a>;
+		regulator-name = "usb1-vbus";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		enable-active-high;
+		gpio = <&pio 7 27 0>;
+		status = "okay";
+        };
+
 };
