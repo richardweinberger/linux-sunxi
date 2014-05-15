@@ -47,6 +47,14 @@
 			pinctrl-0 = <&uart0_pins_a>;
 			status = "okay";
 		};
+
+		p2wi: i2c@01f03400 {
+			pinctrl-names = "default";
+			pinctrl-0 = <&p2wi_pins_a>;
+			status = "okay";
+			#address-cells = <1>;
+			#size-cells = <0>;
+		};
 	};
 
 	reg_usb1_vbus: usb1-vbus {
