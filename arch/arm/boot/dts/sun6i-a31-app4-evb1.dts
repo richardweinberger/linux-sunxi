@@ -54,6 +54,81 @@
 			status = "okay";
 			#address-cells = <1>;
 			#size-cells = <0>;
+
+			axp221: pmic@68 {
+				compatible = "x-powers,axp221";
+				reg = <0x68>;
+				interrupt-parent = <&nmi_intc>;
+				interrupts = <0 8>;
+
+				interrupt-controller;
+				#interrupt-cells = <1>;
+
+				vin1-supply = <&axp_ipsout_reg>;
+				vin2-supply = <&axp_ipsout_reg>;
+				vin3-supply = <&axp_ipsout_reg>;
+				vin4-supply = <&axp_ipsout_reg>;
+				vin5-supply = <&axp_ipsout_reg>;
+				aldoin-supply = <&axp_ipsout_reg>;
+				dldoin-supply = <&axp_ipsout_reg>;
+				eldoin-supply = <&axp_vcc3v0_reg>;
+				ldoioin-supply = <&axp_ipsout_reg>;
+				rtcldoin-supply = <&axp_ipsout_reg>;
+
+				regulators {
+					compatible = "x-powers,axp22x-reg";
+
+					x-powers,dcdc-freq = <1500>;
+
+					axp_vcc3v0_reg: dcdc1 {
+						regulator-always-on;
+					};
+
+					axp_vdd_gpu_reg: dcdc2 {
+						regulator-always-on;
+					};
+
+					axp_vdd_cpu_reg: dcdc3 {
+						regulator-always-on;
+					};
+
+					axp_vdd_sys_reg: dcdc4 {
+						regulator-always-on;
+					};
+
+					axp_vcc_dram_reg: dcdc5 {
+						regulator-always-on;
+					};
+
+					axp_cpus_vdd_reg: dc5ldo {
+						regulator-always-on;
+					};
+
+					axp_rtc_vcc_reg: rtc_ldo {
+						regulator-always-on;
+					};
+
+					axp_wifi_piog_vcc_reg: aldo1 {
+					};
+
+					axp_io_lpddr2_reg: aldo2 {
+						regulator-always-on;
+					};
+
+					axp_avcc_reg: aldo3 {
+						regulator-always-on;
+					};
+
+					axp_gps_vcc_reg: dldo2 {
+					};
+
+					axp_card_io_vdd_reg: eldo2 {
+					};
+
+					axp_csi_ts_vcc_reg: eldo3 {
+					};
+				};
+			};
 		};
 	};
 
@@ -61,5 +136,13 @@
 		pinctrl-0 = <&usb1_vbus_pin_a>;
 		gpio = <&pio 7 27 0>;
 		status = "okay";
+	};
+
+	axp_ipsout_reg: axp_ipsout {
+		compatible = "regulator-fixed";
+		regulator-name = "axp-ipsout";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		regulator-always-on;
 	};
 };
