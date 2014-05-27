@@ -251,6 +251,74 @@ void devm_regulator_unregister(struct device *dev, struct regulator_dev *rdev)
 }
 EXPORT_SYMBOL_GPL(devm_regulator_unregister);
 
+static void devm_rset_release(struct device *dev, void *res)
+{
+	regulator_set_unregister(*(struct regulator_set **)res);
+}
+
+/**
+ * devm_regulator_set_register - Resource managed regulator_set_register()
+ * @dev: device registering the regulator set
+ * @config: runtime configuration for regulator set
+ *
+ * Called by regulator drivers to register a set of regulators.  Returns a
+ * valid pointer to struct regulator_set on success or an ERR_PTR() on
+ * error.  The regulator will automatically be released when the device
+ * is unbound.
+ */
+struct regulator_set *
+devm_regulator_set_register(struct device *dev,
+			    const struct regulator_set_config *config)
+{
+	struct regulator_set **ptr, *rset;
+
+	ptr = devres_alloc(devm_rset_release, sizeof(*ptr),
+			   GFP_KERNEL);
+	if (!ptr)
+		return ERR_PTR(-ENOMEM);
+
+	rset = regulator_set_register(config);
+	if (!IS_ERR(rset)) {
+		*ptr = rset;
+		devres_add(dev, ptr);
+	} else {
+		devres_free(ptr);
+	}
+
+	return rset;
+}
+EXPORT_SYMBOL_GPL(devm_regulator_set_register);
+
+static int devm_rset_match(struct device *dev, void *res, void *data)
+{
+	struct regulator_set **r = res;
+	if (!r || !*r) {
+		WARN_ON(!r || !*r);
+		return 0;
+	}
+	return *r == data;
+}
+
+/**
+ * devm_regulator_set_unregister - Resource managed regulator_set_unregister()
+ * @dev: device unregistering the regulator set
+ * @rset: regulator set to release
+ *
+ * Unregister a regulator set registered with devm_regulator_set_register().
+ * Normally this function will not need to be called and the resource
+ * management code will ensure that the resource is freed.
+ */
+void devm_regulator_set_unregister(struct device *dev,
+				   struct regulator_set *rset)
+{
+	int rc;
+
+	rc = devres_release(dev, devm_rdev_release, devm_rset_match, rset);
+	if (rc != 0)
+		WARN_ON(rc);
+}
+EXPORT_SYMBOL_GPL(devm_regulator_unregister);
+
 struct regulator_supply_alias_match {
 	struct device *dev;
 	const char *id;

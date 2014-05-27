@@ -3607,6 +3607,112 @@ void regulator_unregister(struct regulator_dev *rdev)
 EXPORT_SYMBOL_GPL(regulator_unregister);
 
 /**
+ * regulator_set_register - register a set of regulators
+ * @config: runtime configuration for regulator set
+ *
+ * Called by regulator drivers to register a set of regulators.
+ * Returns a valid pointer to struct regulator_set on success
+ * or an ERR_PTR() on error.
+ */
+struct regulator_set *
+regulator_set_register(const struct regulator_set_config *config)
+{
+	struct regulator_set *rset;
+	int prev_nregistered = -1;
+	int nregistered = 0;
+	int ret;
+	int i;
+
+	if (!config->descs || !config->nregulators)
+		return ERR_PTR(-EINVAL);
+
+	rset = kzalloc(sizeof(*rset) +
+		       (config->nregulators * sizeof(struct regulator_dev *)),
+		       GFP_KERNEL);
+	if (!rset)
+		return ERR_PTR(-ENOMEM);
+
+	rset->nregulators = config->nregulators;
+
+	while (nregistered < config->nregulators &&
+	       prev_nregistered < nregistered) {
+
+		prev_nregistered = nregistered;
+
+		for (i = 0; i < config->nregulators; i++) {
+			struct regulator_config conf;
+			struct regulator_dev *regulator;
+
+			if (rset->regulators[i])
+				continue;
+
+			memset(&conf, 0, sizeof(conf));
+
+			conf.dev = config->dev;
+			conf.regmap = config->regmap;
+			conf.driver_data = config->driver_data;
+			if (config->matches && config->matches[i].init_data)
+				conf.init_data = config->matches[i].init_data;
+			else if (config->init_data)
+				conf.init_data = config->init_data[i];
+
+			if (config->matches)
+				conf.of_node = config->matches[i].of_node;
+
+			regulator = regulator_register(&config->descs[i],
+						       &conf);
+			if (IS_ERR(regulator)) {
+				ret = PTR_ERR(regulator);
+				if (ret == -EPROBE_DEFER)
+					continue;
+
+				goto err;
+			}
+
+			rset->regulators[i] = regulator;
+			nregistered++;
+		}
+	}
+
+	if (nregistered < config->nregulators) {
+		ret = -EPROBE_DEFER;
+		goto err;
+	}
+
+	return rset;
+
+err:
+	for (i = 0; i < config->nregulators; i++) {
+		if (rset->regulators[i])
+			regulator_unregister(rset->regulators[i]);
+	}
+
+	kfree(rset);
+
+	return ERR_PTR(ret);
+}
+EXPORT_SYMBOL_GPL(regulator_set_register);
+
+/**
+ * regulator_set_unregister - unregister regulator set
+ * @rset: regulator set to unregister
+ *
+ * Called by regulator drivers to unregister a regulator set.
+ */
+void regulator_set_unregister(struct regulator_set *rset)
+{
+	int i;
+
+	for (i = 0; i < rset->nregulators; i++) {
+		if (rset->regulators[i])
+			regulator_unregister(rset->regulators[i]);
+	}
+
+	kfree(rset);
+}
+EXPORT_SYMBOL_GPL(regulator_set_unregister);
+
+/**
  * regulator_suspend_prepare - prepare regulators for system wide suspend
  * @state: system suspend state
  *

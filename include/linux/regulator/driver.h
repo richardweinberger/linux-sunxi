@@ -350,6 +350,48 @@ struct regulator_dev {
 	unsigned int ena_gpio_state:1;
 };
 
+/**
+ * struct regulator_set_config - Dynamic regulator set descriptor
+ *
+ * This structure describe a regulator and each regulator in this set
+ * will be registered using informations passed through regulator_desc
+ * and of_regulator_match tables.
+ *
+ * @dev: struct device providing the regulator set.
+ * @driver_data: private driver data for this regulator set.
+ * @regmap: regmap to use for core regmap helpers if dev_get_regulator() is
+ *          insufficient.
+ * @descs: table of regulator descriptors.
+ * @matches: table of DT regulator descriptors. This table should have
+ *           been filled by the of_regulator_match function.
+ * @init_data: a table of init_data in case matches is NULL or the init_data
+ *             of the match entry is NULL.
+ * @nregulators: number of regulators in the regulator set.
+ */
+struct regulator_set_config {
+	struct device *dev;
+	void *driver_data;
+	struct regmap *regmap;
+	const struct regulator_desc *descs;
+	const struct of_regulator_match *matches;
+	const struct regulator_init_data **init_data;
+	int nregulators;
+};
+
+/*
+ * struct regulator_set - Regulator set
+ *
+ * This structure stores a set of regulator devices provided by a single
+ * device (e.g. a PMIC device).
+ *
+ * @nregulators: number of regulators in the set
+ * @regulators: regulators table
+ */
+struct regulator_set {
+	int nregulators;
+	struct regulator_dev *regulators[0];
+};
+
 struct regulator_dev *
 regulator_register(const struct regulator_desc *regulator_desc,
 		   const struct regulator_config *config);
@@ -359,6 +401,15 @@ devm_regulator_register(struct device *dev,
 			const struct regulator_config *config);
 void regulator_unregister(struct regulator_dev *rdev);
 void devm_regulator_unregister(struct device *dev, struct regulator_dev *rdev);
+
+struct regulator_set *
+regulator_set_register(const struct regulator_set_config *config);
+struct regulator_set *
+devm_regulator_set_register(struct device *dev,
+			    const struct regulator_set_config *config);
+void regulator_set_unregister(struct regulator_set *rset);
+void devm_regulator_set_unregister(struct device *dev,
+				   struct regulator_set *rset);
 
 int regulator_notifier_call_chain(struct regulator_dev *rdev,
 				  unsigned long event, void *data);
