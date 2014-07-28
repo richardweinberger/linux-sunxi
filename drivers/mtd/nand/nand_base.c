@@ -1101,6 +1101,64 @@ out:
 EXPORT_SYMBOL(nand_lock);
 
 /**
+ * nand_scrambler_is_active - check whether a region of a NAND page requires
+ *			      NAND scrambler to be active
+ * @mtd:	mtd info
+ * @page:	NAND page
+ * @column:	offset within the page
+ * @len:	len of the region
+ *
+ * Returns 1 if the randomizer should be enabled, 0 if not, or -ERROR in
+ * case of error.
+ *
+ * In case of success len will contain the size of the region:
+ *  - if the requested region fits in a NAND random region len will not change
+ *  - else len will be replaced by the available length within the NAND random
+ *    region
+ */
+int nand_scrambler_is_active(struct mtd_info *mtd, int page, int column,
+			     int *len)
+{
+	struct nand_chip *chip = mtd->priv;
+	struct nand_scrambler_ctrl *scrambler = nand_scrambler(chip);
+	struct nand_scrambler_layout *layout = scrambler->layout;
+
+	struct nand_scrambler_range *range;
+	int tmp;
+	int i;
+
+	if (!len || *len < 0 || column < 0 ||
+	    column + *len > mtd->writesize + mtd->oobsize)
+		return -EINVAL;
+
+	if (!layout)
+		return 0;
+
+	for (i = 0; i < layout->nranges; i++) {
+		range = &layout->ranges[i];
+
+		if (column < range->offset &&
+		    column + *len > range->offset) {
+			tmp = range->offset - column;
+			if (*len > tmp)
+				*len = tmp;
+
+			return 0;
+		} else if (column >= range->offset &&
+			   column < range->offset + range->length) {
+			tmp = range->offset + range->length - column;
+			if (*len > tmp)
+				*len = tmp;
+
+			return 1;
+		}
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(nand_scrambler_is_active);
+
+/**
  * nand_read_page_raw - [INTERN] read raw page data without ecc
  * @mtd: mtd info structure
  * @chip: nand chip info structure
@@ -1113,9 +1171,15 @@ EXPORT_SYMBOL(nand_lock);
 static int nand_read_page_raw(struct mtd_info *mtd, struct nand_chip *chip,
 			      uint8_t *buf, int oob_required, int page)
 {
-	chip->read_buf(mtd, buf, mtd->writesize);
-	if (oob_required)
-		chip->read_buf(mtd, chip->oob_poi, mtd->oobsize);
+	nand_scrambler_config(mtd, page, 0, NAND_SCRAMBLER_READ);
+	nand_scrambler_read_buf(mtd, buf, mtd->writesize);
+	if (oob_required) {
+		nand_scrambler_config(mtd, page, mtd->writesize,
+				      NAND_SCRAMBLER_READ);
+		nand_scrambler_read_buf(mtd, chip->oob_poi, mtd->oobsize);
+	}
+	nand_scrambler_config(mtd, -1, -1, NAND_SCRAMBLER_DISABLE);
+
 	return 0;
 }
 
@@ -1137,28 +1201,43 @@ static int nand_read_page_raw_syndrome(struct mtd_info *mtd,
 	int eccbytes = nand_ecc(chip)->bytes;
 	uint8_t *oob = chip->oob_poi;
 	int steps, size;
+	int column = 0;
 
 	for (steps = nand_ecc(chip)->steps; steps > 0; steps--) {
-		chip->read_buf(mtd, buf, eccsize);
+		nand_scrambler_config(mtd, page, column, NAND_SCRAMBLER_READ);
+		nand_scrambler_read_buf(mtd, buf, eccsize);
 		buf += eccsize;
+		column += eccsize;
 
 		if (nand_ecc(chip)->prepad) {
-			chip->read_buf(mtd, oob, nand_ecc(chip)->prepad);
+			nand_scrambler_config(mtd, page, column,
+					      NAND_SCRAMBLER_READ);
+			nand_scrambler_read_buf(mtd, oob,
+						nand_ecc(chip)->prepad);
 			oob += nand_ecc(chip)->prepad;
+			column += nand_ecc(chip)->prepad;
 		}
 
-		chip->read_buf(mtd, oob, eccbytes);
+		nand_scrambler_config(mtd, page, column, NAND_SCRAMBLER_READ);
+		nand_scrambler_read_buf(mtd, oob, eccbytes);
 		oob += eccbytes;
+		column += eccbytes;
 
 		if (nand_ecc(chip)->postpad) {
-			chip->read_buf(mtd, oob, nand_ecc(chip)->postpad);
+			nand_scrambler_config(mtd, page, column,
+					      NAND_SCRAMBLER_READ);
+			nand_scrambler_read_buf(mtd, oob, nand_ecc(chip)->postpad);
 			oob += nand_ecc(chip)->postpad;
+			column += nand_ecc(chip)->postpad;
 		}
 	}
 
 	size = mtd->oobsize - (oob - chip->oob_poi);
-	if (size)
-		chip->read_buf(mtd, oob, size);
+	if (size) {
+		nand_scrambler_config(mtd, page, column, NAND_SCRAMBLER_READ);
+		nand_scrambler_read_buf(mtd, oob, size);
+	}
+	nand_scrambler_config(mtd, -1, -1, NAND_SCRAMBLER_DISABLE);
 
 	return 0;
 }
@@ -1247,7 +1326,8 @@ static int nand_read_subpage(struct mtd_info *mtd, struct nand_chip *chip,
 		chip->cmdfunc(mtd, NAND_CMD_RNDOUT, data_col_addr, -1);
 
 	p = bufpoi + data_col_addr;
-	chip->read_buf(mtd, p, datafrag_len);
+	nand_scrambler_config(mtd, -1, data_col_addr, NAND_SCRAMBLER_READ);
+	nand_scrambler_read_buf(mtd, p, datafrag_len);
 
 	/* Calculate ECC */
 	for (i = 0; i < eccfrag_len;
@@ -1266,7 +1346,9 @@ static int nand_read_subpage(struct mtd_info *mtd, struct nand_chip *chip,
 	}
 	if (gaps) {
 		chip->cmdfunc(mtd, NAND_CMD_RNDOUT, mtd->writesize, -1);
-		chip->read_buf(mtd, chip->oob_poi, mtd->oobsize);
+		nand_scrambler_config(mtd, -1, mtd->writesize,
+				      NAND_SCRAMBLER_READ);
+		nand_scrambler_read_buf(mtd, chip->oob_poi, mtd->oobsize);
 	} else {
 		/*
 		 * Send the command to read the particular ECC bytes take care
@@ -1282,7 +1364,10 @@ static int nand_read_subpage(struct mtd_info *mtd, struct nand_chip *chip,
 
 		chip->cmdfunc(mtd, NAND_CMD_RNDOUT,
 					mtd->writesize + aligned_pos, -1);
-		chip->read_buf(mtd, &chip->oob_poi[aligned_pos], aligned_len);
+		nand_scrambler_config(mtd, -1, mtd->writesize + aligned_pos,
+				      NAND_SCRAMBLER_READ);
+		nand_scrambler_read_buf(mtd, &chip->oob_poi[aligned_pos],
+					aligned_len);
 	}
 
 	for (i = 0; i < eccfrag_len; i++)
@@ -1303,6 +1388,7 @@ static int nand_read_subpage(struct mtd_info *mtd, struct nand_chip *chip,
 			max_bitflips = max_t(unsigned int, max_bitflips, stat);
 		}
 	}
+	nand_scrambler_config(mtd, -1, -1, NAND_SCRAMBLER_READ);
 	return max_bitflips;
 }
 
@@ -1327,13 +1413,17 @@ static int nand_read_page_hwecc(struct mtd_info *mtd, struct nand_chip *chip,
 	uint8_t *ecc_code = chip->buffers->ecccode;
 	uint32_t *eccpos = nand_ecc(chip)->layout->eccpos;
 	unsigned int max_bitflips = 0;
+	int column = 0;
 
 	for (i = 0; eccsteps; eccsteps--, i += eccbytes, p += eccsize) {
 		nand_ecc(chip)->hwctl(mtd, NAND_ECC_READ);
-		chip->read_buf(mtd, p, eccsize);
+		nand_scrambler_config(mtd, page, column, NAND_SCRAMBLER_READ);
+		nand_scrambler_read_buf(mtd, p, eccsize);
 		nand_ecc(chip)->calculate(mtd, p, &ecc_calc[i]);
+		column += eccsize;
 	}
-	chip->read_buf(mtd, chip->oob_poi, mtd->oobsize);
+	nand_scrambler_config(mtd, page, column, NAND_SCRAMBLER_READ);
+	nand_scrambler_read_buf(mtd, chip->oob_poi, mtd->oobsize);
 
 	for (i = 0; i < nand_ecc(chip)->total; i++)
 		ecc_code[i] = chip->oob_poi[eccpos[i]];
@@ -1353,6 +1443,7 @@ static int nand_read_page_hwecc(struct mtd_info *mtd, struct nand_chip *chip,
 			max_bitflips = max_t(unsigned int, max_bitflips, stat);
 		}
 	}
+	nand_scrambler_config(mtd, -1, -1, NAND_SCRAMBLER_DISABLE);
 	return max_bitflips;
 }
 
@@ -1381,11 +1472,14 @@ static int nand_read_page_hwecc_oob_first(struct mtd_info *mtd,
 	uint32_t *eccpos = nand_ecc(chip)->layout->eccpos;
 	uint8_t *ecc_calc = chip->buffers->ecccalc;
 	unsigned int max_bitflips = 0;
+	int column = 0;
 
 	/* Read the OOB area first */
 	chip->cmdfunc(mtd, NAND_CMD_READOOB, 0, page);
-	chip->read_buf(mtd, chip->oob_poi, mtd->oobsize);
+	nand_scrambler_config(mtd, page, mtd->writesize, NAND_SCRAMBLER_READ);
+	nand_scrambler_read_buf(mtd, chip->oob_poi, mtd->oobsize);
 	chip->cmdfunc(mtd, NAND_CMD_READ0, 0, page);
+	column = 0;
 
 	for (i = 0; i < nand_ecc(chip)->total; i++)
 		ecc_code[i] = chip->oob_poi[eccpos[i]];
@@ -1394,7 +1488,8 @@ static int nand_read_page_hwecc_oob_first(struct mtd_info *mtd,
 		int stat;
 
 		nand_ecc(chip)->hwctl(mtd, NAND_ECC_READ);
-		chip->read_buf(mtd, p, eccsize);
+		nand_scrambler_config(mtd, page, column, NAND_SCRAMBLER_READ);
+		nand_scrambler_read_buf(mtd, p, eccsize);
 		nand_ecc(chip)->calculate(mtd, p, &ecc_calc[i]);
 
 		stat = nand_ecc(chip)->correct(mtd, p, &ecc_code[i], NULL);
@@ -1405,6 +1500,7 @@ static int nand_read_page_hwecc_oob_first(struct mtd_info *mtd,
 			max_bitflips = max_t(unsigned int, max_bitflips, stat);
 		}
 	}
+	nand_scrambler_config(mtd, -1, -1, NAND_SCRAMBLER_DISABLE);
 	return max_bitflips;
 }
 
@@ -1428,20 +1524,28 @@ static int nand_read_page_syndrome(struct mtd_info *mtd, struct nand_chip *chip,
 	uint8_t *p = buf;
 	uint8_t *oob = chip->oob_poi;
 	unsigned int max_bitflips = 0;
+	int column = 0;
 
 	for (i = 0; eccsteps; eccsteps--, i += eccbytes, p += eccsize) {
 		int stat;
 
 		nand_ecc(chip)->hwctl(mtd, NAND_ECC_READ);
-		chip->read_buf(mtd, p, eccsize);
+		nand_scrambler_config(mtd, page, column, NAND_SCRAMBLER_READ);
+		nand_scrambler_read_buf(mtd, p, eccsize);
+		column += eccsize;
 
 		if (nand_ecc(chip)->prepad) {
-			chip->read_buf(mtd, oob, nand_ecc(chip)->prepad);
+			nand_scrambler_config(mtd, page, column,
+					      NAND_SCRAMBLER_READ);
+			nand_scrambler_read_buf(mtd, oob,
+						nand_ecc(chip)->prepad);
 			oob += nand_ecc(chip)->prepad;
 		}
 
 		nand_ecc(chip)->hwctl(mtd, NAND_ECC_READSYN);
-		chip->read_buf(mtd, oob, eccbytes);
+		nand_scrambler_config(mtd, page, column, NAND_SCRAMBLER_READ);
+		nand_scrambler_read_buf(mtd, oob, eccbytes);
+		column += eccbytes;
 		stat = nand_ecc(chip)->correct(mtd, p, oob, NULL);
 
 		if (stat < 0) {
@@ -1454,29 +1558,38 @@ static int nand_read_page_syndrome(struct mtd_info *mtd, struct nand_chip *chip,
 		oob += eccbytes;
 
 		if (nand_ecc(chip)->postpad) {
-			chip->read_buf(mtd, oob, nand_ecc(chip)->postpad);
+			nand_scrambler_config(mtd, page, column,
+					      NAND_SCRAMBLER_READ);
+			nand_scrambler_read_buf(mtd, oob,
+						nand_ecc(chip)->postpad);
+			column += nand_ecc(chip)->postpad;
 			oob += nand_ecc(chip)->postpad;
 		}
 	}
 
 	/* Calculate remaining oob bytes */
 	i = mtd->oobsize - (oob - chip->oob_poi);
-	if (i)
-		chip->read_buf(mtd, oob, i);
+	if (i) {
+		nand_scrambler_config(mtd, page, column, NAND_SCRAMBLER_READ);
+		nand_scrambler_read_buf(mtd, oob, i);
+	}
+	nand_scrambler_config(mtd, -1, -1, NAND_SCRAMBLER_READ);
 
 	return max_bitflips;
 }
 
 /**
  * nand_transfer_oob - [INTERN] Transfer oob to client buffer
- * @chip: nand chip structure
+ * @mtd: mtd structure
  * @oob: oob destination address
  * @ops: oob ops structure
  * @len: size of oob to transfer
  */
-static uint8_t *nand_transfer_oob(struct nand_chip *chip, uint8_t *oob,
+static uint8_t *nand_transfer_oob(struct mtd_info *mtd, uint8_t *oob,
 				  struct mtd_oob_ops *ops, size_t len)
 {
+	struct nand_chip *chip = mtd->priv;
+
 	switch (ops->mode) {
 
 	case MTD_OPS_PLACE_OOB:
@@ -1604,6 +1717,7 @@ read_retry:
 			 * Now read the page into the buffer.  Absent an error,
 			 * the read methods return max bitflips per ecc step.
 			 */
+			nand_scrambler_config(mtd, page, -1, NAND_SCRAMBLER_READ);
 			if (unlikely(ops->mode == MTD_OPS_RAW))
 				ret = nand_ecc(chip)->read_page_raw(mtd, chip,
 							      bufpoi,
@@ -1618,6 +1732,8 @@ read_retry:
 				ret = nand_ecc(chip)->read_page(mtd, chip,
 							  bufpoi,
 							  oob_required, page);
+			nand_scrambler_config(mtd, -1, -1, NAND_SCRAMBLER_DISABLE);
+
 			if (ret < 0) {
 				if (use_bufpoi)
 					/* Invalidate page cache */
@@ -1645,8 +1761,8 @@ read_retry:
 				int toread = min(oobreadlen, max_oobsize);
 
 				if (toread) {
-					oob = nand_transfer_oob(chip,
-						oob, ops, toread);
+					oob = nand_transfer_oob(mtd, oob, ops,
+								toread);
 					oobreadlen -= toread;
 				}
 			}
@@ -1762,7 +1878,9 @@ static int nand_read_oob_std(struct mtd_info *mtd, struct nand_chip *chip,
 			     int page)
 {
 	chip->cmdfunc(mtd, NAND_CMD_READOOB, 0, page);
-	chip->read_buf(mtd, chip->oob_poi, mtd->oobsize);
+	nand_scrambler_config(mtd, page, mtd->writesize, NAND_SCRAMBLER_READ);
+	nand_scrambler_read_buf(mtd, chip->oob_poi, mtd->oobsize);
+	nand_scrambler_config(mtd, -1, -1, NAND_SCRAMBLER_READ);
 	return 0;
 }
 
@@ -1781,7 +1899,7 @@ static int nand_read_oob_syndrome(struct mtd_info *mtd, struct nand_chip *chip,
 		    nand_ecc(chip)->postpad;
 	int eccsize = nand_ecc(chip)->size;
 	uint8_t *bufpoi = chip->oob_poi;
-	int i, toread, sndrnd = 0, pos;
+	int i, toread, sndrnd = 0, pos = eccsize;
 
 	chip->cmdfunc(mtd, NAND_CMD_READ0, nand_ecc(chip)->size, page);
 	for (i = 0; i < nand_ecc(chip)->steps; i++) {
@@ -1794,12 +1912,17 @@ static int nand_read_oob_syndrome(struct mtd_info *mtd, struct nand_chip *chip,
 		} else
 			sndrnd = 1;
 		toread = min_t(int, length, chunk);
-		chip->read_buf(mtd, bufpoi, toread);
+		nand_scrambler_config(mtd, page, pos, NAND_SCRAMBLER_READ);
+		nand_scrambler_read_buf(mtd, bufpoi, toread);
 		bufpoi += toread;
 		length -= toread;
 	}
-	if (length > 0)
-		chip->read_buf(mtd, bufpoi, length);
+	if (length > 0) {
+		pos = mtd->writesize + mtd->oobsize - length;
+		nand_scrambler_config(mtd, page, pos, NAND_SCRAMBLER_READ);
+		nand_scrambler_read_buf(mtd, bufpoi, length);
+	}
+	nand_scrambler_config(mtd, -1, -1, NAND_SCRAMBLER_READ);
 
 	return 0;
 }
@@ -1818,7 +1941,9 @@ static int nand_write_oob_std(struct mtd_info *mtd, struct nand_chip *chip,
 	int length = mtd->oobsize;
 
 	chip->cmdfunc(mtd, NAND_CMD_SEQIN, mtd->writesize, page);
-	chip->write_buf(mtd, buf, length);
+	nand_scrambler_config(mtd, page, mtd->writesize, NAND_SCRAMBLER_WRITE);
+	nand_scrambler_write_buf(mtd, buf, length);
+	nand_scrambler_config(mtd, -1, -1, NAND_SCRAMBLER_DISABLE);
 	/* Send command to program the OOB data */
 	chip->cmdfunc(mtd, NAND_CMD_PAGEPROG, -1, -1);
 
@@ -1863,7 +1988,8 @@ static int nand_write_oob_syndrome(struct mtd_info *mtd,
 				len = eccsize;
 				while (len > 0) {
 					int num = min_t(int, len, 4);
-					chip->write_buf(mtd, (uint8_t *)&fill,
+					nand_scrambler_write_buf(mtd,
+							(uint8_t *)&fill,
 							num);
 					len -= num;
 				}
@@ -1874,12 +2000,18 @@ static int nand_write_oob_syndrome(struct mtd_info *mtd,
 		} else
 			sndcmd = 1;
 		len = min_t(int, length, chunk);
-		chip->write_buf(mtd, bufpoi, len);
+		nand_scrambler_config(mtd, page, pos, NAND_SCRAMBLER_WRITE);
+		nand_scrambler_write_buf(mtd, bufpoi, len);
 		bufpoi += len;
 		length -= len;
 	}
-	if (length > 0)
-		chip->write_buf(mtd, bufpoi, length);
+	if (length > 0) {
+		pos = mtd->writesize + mtd->oobsize - length;
+		nand_scrambler_config(mtd, page, pos, NAND_SCRAMBLER_WRITE);
+		nand_scrambler_write_buf(mtd, bufpoi, length);
+	}
+
+	nand_scrambler_config(mtd, -1, -1, NAND_SCRAMBLER_WRITE);
 
 	chip->cmdfunc(mtd, NAND_CMD_PAGEPROG, -1, -1);
 	status = chip->waitfunc(mtd, chip);
@@ -1948,7 +2080,7 @@ static int nand_do_read_oob(struct mtd_info *mtd, loff_t from,
 			break;
 
 		len = min(len, readlen);
-		buf = nand_transfer_oob(chip, buf, ops, len);
+		buf = nand_transfer_oob(mtd, buf, ops, len);
 
 		if (chip->options & NAND_NEED_READRDY) {
 			/* Apply delay or wait for ready/busy pin */
@@ -2030,7 +2162,6 @@ out:
 	return ret;
 }
 
-
 /**
  * nand_write_page_raw - [INTERN] raw page write function
  * @mtd: mtd info structure
@@ -2043,9 +2174,12 @@ out:
 static int nand_write_page_raw(struct mtd_info *mtd, struct nand_chip *chip,
 				const uint8_t *buf, int oob_required)
 {
-	chip->write_buf(mtd, buf, mtd->writesize);
-	if (oob_required)
-		chip->write_buf(mtd, chip->oob_poi, mtd->oobsize);
+	nand_scrambler_write_buf(mtd, buf, mtd->writesize);
+	if (oob_required) {
+		nand_scrambler_config(mtd, -1, mtd->writesize,
+				      NAND_SCRAMBLER_WRITE);
+		nand_scrambler_write_buf(mtd, chip->oob_poi, mtd->oobsize);
+	}
 
 	return 0;
 }
@@ -2067,28 +2201,43 @@ static int nand_write_page_raw_syndrome(struct mtd_info *mtd,
 	int eccbytes = nand_ecc(chip)->bytes;
 	uint8_t *oob = chip->oob_poi;
 	int steps, size;
+	int column = 0;
 
 	for (steps = nand_ecc(chip)->steps; steps > 0; steps--) {
-		chip->write_buf(mtd, buf, eccsize);
+		nand_scrambler_config(mtd, -1, column, NAND_SCRAMBLER_WRITE);
+		nand_scrambler_write_buf(mtd, buf, eccsize);
 		buf += eccsize;
+		column += eccsize;
 
 		if (nand_ecc(chip)->prepad) {
-			chip->write_buf(mtd, oob, nand_ecc(chip)->prepad);
+			nand_scrambler_config(mtd, -1, column,
+					      NAND_SCRAMBLER_WRITE);
+			nand_scrambler_write_buf(mtd, oob,
+						 nand_ecc(chip)->prepad);
 			oob += nand_ecc(chip)->prepad;
+			column += nand_ecc(chip)->prepad;
 		}
 
-		chip->write_buf(mtd, oob, eccbytes);
+		nand_scrambler_config(mtd, -1, column, NAND_SCRAMBLER_WRITE);
+		nand_scrambler_write_buf(mtd, oob, eccbytes);
 		oob += eccbytes;
+		column += eccbytes;
 
 		if (nand_ecc(chip)->postpad) {
-			chip->write_buf(mtd, oob, nand_ecc(chip)->postpad);
+			nand_scrambler_config(mtd, -1, column,
+					      NAND_SCRAMBLER_WRITE);
+			nand_scrambler_write_buf(mtd, oob,
+						 nand_ecc(chip)->postpad);
 			oob += nand_ecc(chip)->postpad;
+			column += nand_ecc(chip)->postpad;
 		}
 	}
 
 	size = mtd->oobsize - (oob - chip->oob_poi);
-	if (size)
-		chip->write_buf(mtd, oob, size);
+	if (size) {
+		nand_scrambler_config(mtd, -1, column, NAND_SCRAMBLER_WRITE);
+		nand_scrambler_write_buf(mtd, oob, size);
+	}
 
 	return 0;
 }
@@ -2135,17 +2284,21 @@ static int nand_write_page_hwecc(struct mtd_info *mtd, struct nand_chip *chip,
 	uint8_t *ecc_calc = chip->buffers->ecccalc;
 	const uint8_t *p = buf;
 	uint32_t *eccpos = nand_ecc(chip)->layout->eccpos;
+	int column = 0;
 
 	for (i = 0; eccsteps; eccsteps--, i += eccbytes, p += eccsize) {
 		nand_ecc(chip)->hwctl(mtd, NAND_ECC_WRITE);
-		chip->write_buf(mtd, p, eccsize);
+		nand_scrambler_config(mtd, -1, column, NAND_SCRAMBLER_WRITE);
+		nand_scrambler_write_buf(mtd, p, eccsize);
 		nand_ecc(chip)->calculate(mtd, p, &ecc_calc[i]);
+		column += eccsize;
 	}
 
 	for (i = 0; i < nand_ecc(chip)->total; i++)
 		chip->oob_poi[eccpos[i]] = ecc_calc[i];
 
-	chip->write_buf(mtd, chip->oob_poi, mtd->oobsize);
+	nand_scrambler_config(mtd, -1, column, NAND_SCRAMBLER_WRITE);
+	nand_scrambler_write_buf(mtd, chip->oob_poi, mtd->oobsize);
 
 	return 0;
 }
@@ -2181,7 +2334,9 @@ static int nand_write_subpage_hwecc(struct mtd_info *mtd,
 		nand_ecc(chip)->hwctl(mtd, NAND_ECC_WRITE);
 
 		/* write data (untouched subpages already masked by 0xFF) */
-		chip->write_buf(mtd, buf, ecc_size);
+		nand_scrambler_config(mtd, -1, offset, NAND_SCRAMBLER_WRITE);
+		nand_scrambler_write_buf(mtd, buf, ecc_size);
+		offset += ecc_size;
 
 		/* mask ECC of un-touched subpages by padding 0xFF */
 		if ((step < start_step) || (step > end_step))
@@ -2206,7 +2361,8 @@ static int nand_write_subpage_hwecc(struct mtd_info *mtd,
 		chip->oob_poi[eccpos[i]] = ecc_calc[i];
 
 	/* write OOB buffer to NAND device */
-	chip->write_buf(mtd, chip->oob_poi, mtd->oobsize);
+	nand_scrambler_config(mtd, -1, offset, NAND_SCRAMBLER_WRITE);
+	nand_scrambler_write_buf(mtd, chip->oob_poi, mtd->oobsize);
 
 	return 0;
 }
@@ -2231,31 +2387,45 @@ static int nand_write_page_syndrome(struct mtd_info *mtd,
 	int eccsteps = nand_ecc(chip)->steps;
 	const uint8_t *p = buf;
 	uint8_t *oob = chip->oob_poi;
+	int column = 0;
 
 	for (i = 0; eccsteps; eccsteps--, i += eccbytes, p += eccsize) {
-
 		nand_ecc(chip)->hwctl(mtd, NAND_ECC_WRITE);
-		chip->write_buf(mtd, p, eccsize);
+		nand_scrambler_config(mtd, -1, column, NAND_SCRAMBLER_WRITE);
+		nand_scrambler_write_buf(mtd, p, eccsize);
+		column += eccsize;
 
 		if (nand_ecc(chip)->prepad) {
-			chip->write_buf(mtd, oob, nand_ecc(chip)->prepad);
+			nand_scrambler_config(mtd, -1, column,
+					      NAND_SCRAMBLER_WRITE);
+			nand_scrambler_write_buf(mtd, oob,
+						 nand_ecc(chip)->prepad);
 			oob += nand_ecc(chip)->prepad;
+			column += nand_ecc(chip)->prepad;
 		}
 
 		nand_ecc(chip)->calculate(mtd, p, oob);
-		chip->write_buf(mtd, oob, eccbytes);
+		nand_scrambler_config(mtd, -1, column, NAND_SCRAMBLER_WRITE);
+		nand_scrambler_write_buf(mtd, oob, eccbytes);
 		oob += eccbytes;
+		column += eccbytes;
 
 		if (nand_ecc(chip)->postpad) {
-			chip->write_buf(mtd, oob, nand_ecc(chip)->postpad);
+			nand_scrambler_config(mtd, -1, column,
+					      NAND_SCRAMBLER_WRITE);
+			nand_scrambler_write_buf(mtd, oob,
+						 nand_ecc(chip)->postpad);
 			oob += nand_ecc(chip)->postpad;
+			column += nand_ecc(chip)->postpad;
 		}
 	}
 
 	/* Calculate remaining oob bytes */
 	i = mtd->oobsize - (oob - chip->oob_poi);
-	if (i)
-		chip->write_buf(mtd, oob, i);
+	if (i) {
+		nand_scrambler_config(mtd, -1, column, NAND_SCRAMBLER_WRITE);
+		nand_scrambler_write_buf(mtd, oob, i);
+	}
 
 	return 0;
 }
@@ -2286,6 +2456,7 @@ static int nand_write_page(struct mtd_info *mtd, struct nand_chip *chip,
 
 	chip->cmdfunc(mtd, NAND_CMD_SEQIN, 0x00, page);
 
+	nand_scrambler_config(mtd, page, 0, NAND_SCRAMBLER_WRITE);
 	if (unlikely(raw))
 		status = nand_ecc(chip)->write_page_raw(mtd, chip, buf,
 							oob_required);
@@ -2296,6 +2467,7 @@ static int nand_write_page(struct mtd_info *mtd, struct nand_chip *chip,
 	else
 		status = nand_ecc(chip)->write_page(mtd, chip, buf,
 						    oob_required);
+	nand_scrambler_config(mtd, -1, -1, NAND_SCRAMBLER_DISABLE);
 
 	if (status < 0)
 		return status;
@@ -4287,6 +4459,9 @@ static int nand_part_add(struct mtd_part *part)
 		nand_ecc_ctrl_init(&part->mtd, npart->ecc);
 	else
 		npart->ecc = &chip->ecc;
+
+	if (!npart->scrambler)
+		npart->scrambler = &chip->scrambler;
 
 	return 0;
 }

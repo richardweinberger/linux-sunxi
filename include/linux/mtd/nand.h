@@ -524,6 +524,67 @@ struct nand_ecc_ctrl {
 };
 
 /**
+ * enum nand_scrambler_action - Constants for scrambler actions
+ * @NAND_SCRAMBLER_DISABLE: the scrambler should be disabled
+ * @NAND_SCRAMBLER_READ: the scrambler should be enabled for a read operation
+ * @NAND_SCRAMBLER_WRITE: the scrambler should be enabled for a write operation
+ */
+enum nand_scrambler_action {
+	NAND_SCRAMBLER_DISABLE,
+	NAND_SCRAMBLER_READ,
+	NAND_SCRAMBLER_WRITE,
+};
+
+/**
+ * struct nand_scrambler_range - Structure defining a NAND page region
+ *				 where the scrambler is active
+ * @offset:	range offset
+ * @length:	range length
+ */
+struct nand_scrambler_range {
+	u32 offset;
+	u32 length;
+};
+
+/**
+ * struct nand_scrambler_layout - Structure defining the regions where the
+ *				  scrambler should be active
+ * @nranges:	number of ranges
+ * @ranges:	array defining the rndfree regions
+ */
+struct nand_scrambler_layout {
+	int nranges;
+	struct nand_scrambler_range ranges[0];
+};
+
+/**
+ * struct nand_scrambler_ops - Scrambler operations structure
+ * @config:	function to prepare the randomizer (i.e.: set the appropriate
+ *		seed/init value).
+ * @read_buf:	function that read from the NAND and descramble the retrieved
+ *		data.
+ * @write_buf:	function that scramble data before writing it to the NAND.
+ */
+struct nand_scrambler_ops {
+	int (*config)(struct mtd_info *mtd, int page, int column,
+		      enum nand_scrambler_action action);
+	void (*write_buf)(struct mtd_info *mtd, const uint8_t *buf, int len);
+	void (*read_buf)(struct mtd_info *mtd, uint8_t *buf, int len);
+};
+
+/**
+ * struct nand_scrambler_ctrl - Scrambler control structure
+ * @layout:	scrambler layout
+ * @ops:	scrambler operations
+ * @priv:	private field
+ */
+struct nand_scrambler_ctrl {
+	struct nand_scrambler_layout *layout;
+	const struct nand_scrambler_ops *ops;
+	void *priv;
+};
+
+/**
  * struct nand_buffers - buffer structure for read/write
  * @ecccalc:	buffer pointer for calculated ECC, size is oobsize.
  * @ecccode:	buffer pointer for ECC read from flash, size is oobsize.
@@ -540,6 +601,7 @@ struct nand_buffers {
 
 struct nand_part {
 	struct nand_ecc_ctrl *ecc;
+	struct nand_scrambler_ctrl *scrambler;
 	void *priv;
 };
 
@@ -738,6 +800,7 @@ struct nand_chip {
 	struct nand_ecc_ctrl ecc;
 	struct nand_buffers *buffers;
 	struct nand_hw_control hwcontrol;
+	struct nand_scrambler_ctrl scrambler;
 
 	uint8_t *bbt;
 	struct nand_bbt_descr *bbt_td;
@@ -1068,4 +1131,57 @@ static inline struct nand_ecc_ctrl *nand_ecc(struct nand_chip *chip)
 
 	return npart->ecc;
 }
+
+
+static inline struct nand_scrambler_ctrl *nand_scrambler(struct nand_chip *chip)
+{
+	struct nand_part *npart;
+
+	if (!chip->cur_part)
+		return &chip->scrambler;
+
+	npart = chip->cur_part->mtd.priv;
+
+	return npart->scrambler;
+}
+
+static inline int nand_scrambler_config(struct mtd_info *mtd, int page,
+					int column,
+					enum nand_scrambler_action action)
+{
+	struct nand_chip *chip = mtd->priv;
+	struct nand_scrambler_ctrl *scrambler = nand_scrambler(chip);
+
+	if (scrambler->ops && scrambler->ops->config)
+		return scrambler->ops->config(mtd, page, column, action);
+
+	return 0;
+}
+
+static inline void nand_scrambler_write_buf(struct mtd_info *mtd,
+					    const uint8_t *buf, int len)
+{
+	struct nand_chip *chip = mtd->priv;
+	struct nand_scrambler_ctrl *scrambler = nand_scrambler(chip);
+
+	if (scrambler->ops && scrambler->ops->write_buf)
+		scrambler->ops->write_buf(mtd, buf, len);
+	else
+		chip->write_buf(mtd, buf, len);
+}
+
+static inline void nand_scrambler_read_buf(struct mtd_info *mtd,
+					   uint8_t *buf, int len)
+{
+	struct nand_chip *chip = mtd->priv;
+	struct nand_scrambler_ctrl *scrambler = nand_scrambler(chip);
+
+	if (scrambler->ops && scrambler->ops->read_buf)
+		scrambler->ops->read_buf(mtd, buf, len);
+	else
+		chip->read_buf(mtd, buf, len);
+}
+
+int nand_scrambler_is_active(struct mtd_info *mtd, int page, int column,
+			     int *len);
 #endif /* __LINUX_MTD_NAND_H */
