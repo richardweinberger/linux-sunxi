@@ -1423,7 +1423,7 @@ static int nand_read_subpage(struct mtd_info *mtd, struct nand_chip *chip,
 	start_step = data_offs / chip->cur_ecc->size;
 	end_step = (data_offs + readlen - 1) / chip->cur_ecc->size;
 	num_steps = end_step - start_step + 1;
-	index = start_step * chip->ecc.bytes;
+	index = start_step * chip->cur_ecc->bytes;
 
 	/* Data size aligned to ECC ecc.size */
 	datafrag_len = num_steps * chip->cur_ecc->size;
