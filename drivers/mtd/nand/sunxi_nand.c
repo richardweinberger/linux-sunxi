@@ -1728,29 +1728,42 @@ static int sunxi_nand_chip_init(struct device *dev, struct sunxi_nfc *nfc,
 		return -EINVAL;
 
 	nsels /= sizeof(u32);
-	if (!nsels)
+	if (!nsels) {
+		dev_err(dev, "invalid reg porperty size\n");
 		return -EINVAL;
+	}
 
 	chip = devm_kzalloc(dev,
 			    sizeof(*chip) +
 			    (nsels * sizeof(struct sunxi_nand_chip_sel)),
 			    GFP_KERNEL);
-	if (!chip)
+	if (!chip) {
+		dev_err(dev, "could not allocate chip\n");
 		return -ENOMEM;
+	}
 
 	chip->nsels = nsels;
 	chip->selected = -1;
 
 	for (i = 0; i < nsels; i++) {
 		ret = of_property_read_u32_index(np, "reg", i, &tmp);
-		if (ret)
+		if (ret) {
+			dev_err(dev, "could not retrieve reg property: %d\n",
+				ret);
 			return ret;
+		}
 
-		if (tmp > 7)
+		if (tmp > 7) {
+			dev_err(dev,
+				"invalid reg value: %u (max CS = 7)\n",
+				tmp);
 			return -EINVAL;
+		}
 
-		if (test_and_set_bit(tmp, &nfc->assigned_cs))
+		if (test_and_set_bit(tmp, &nfc->assigned_cs)) {
+			dev_err(dev, "CS %d already assigned\n", tmp);
 			return -EINVAL;
+		}
 
 		chip->sels[i].cs = tmp;
 
@@ -1778,10 +1791,19 @@ static int sunxi_nand_chip_init(struct device *dev, struct sunxi_nfc *nfc,
 	}
 
 	timings = onfi_async_timing_mode_to_sdr_timings(0);
-	if (IS_ERR(timings))
-		return PTR_ERR(timings);
+	if (IS_ERR(timings)) {
+		ret = PTR_ERR(timings);
+		dev_err(dev,
+			"could not retrieve timings for ONFI mode 0: %d\n",
+			ret);
+		return ret;
+	}
 
 	ret = sunxi_nand_chip_set_timings(chip, timings);
+	if (ret) {
+		dev_err(dev, "could not configure chip timings: %d\n", ret);
+		return ret;
+	}
 
 	nand = &chip->nand;
 	/* Default tR value specified in the ONFI spec (chapter 4.15.1) */
@@ -1806,28 +1828,40 @@ static int sunxi_nand_chip_init(struct device *dev, struct sunxi_nfc *nfc,
 		return ret;
 
 	chip->buffer = kzalloc(mtd->writesize + mtd->oobsize, GFP_KERNEL);
-	if (!chip->buffer)
+	if (!chip->buffer) {
+		dev_err(dev, "could not allocate chip buffer\n");
 		return -ENOMEM;
+	}
 
 	ret = sunxi_nand_chip_init_timings(chip, np);
-	if (ret)
+	if (ret) {
+		dev_err(dev, "could not configure chip timings: %d\n", ret);
 		return ret;
+	}
 
 	ret = nand_pst_create(mtd);
-	if (ret)
+	if (ret) {
+		dev_err(dev, "could not create page status table: %d\n", ret);
 		return ret;
+	}
 
 	ret = sunxi_nand_ecc_init(mtd, &nand->ecc, np);
-	if (ret)
+	if (ret) {
+		dev_err(dev, "ECC init failed: %d\n", ret);
 		return ret;
+	}
 
 	ret = sunxi_nand_rnd_init(mtd, &nand->rnd, &nand->ecc, np);
-	if (ret)
+	if (ret) {
+		dev_err(dev, "RND init failed: %d\n", ret);
 		return ret;
+	}
 
 	ret = nand_scan_tail(mtd);
-	if (ret)
+	if (ret) {
+		dev_err(dev, "nand_scan_tail failed: %d\n", ret);
 		return ret;
+	}
 
 	if (of_property_read_string(np, "nand-name", &mtd->name)) {
 		snprintf(chip->default_name, MAX_NAME_SIZE,
@@ -1844,6 +1878,7 @@ static int sunxi_nand_chip_init(struct device *dev, struct sunxi_nfc *nfc,
 		ret = 0;
 
 	if (ret) {
+		dev_err(dev, "failed to register mtd device: %d\n", ret);
 		nand_release(mtd);
 		return ret;
 	}
@@ -1860,8 +1895,10 @@ static int sunxi_nand_chips_init(struct device *dev, struct sunxi_nfc *nfc)
 	int nchips = of_get_child_count(np);
 	int ret;
 
-	if (nchips > 8)
+	if (nchips > 8) {
+		dev_err(dev, "too many NAND chips: %d (max = 8)\n", nchips);
 		return -EINVAL;
+	}
 
 	for_each_child_of_node(np, nand_np) {
 		ret = sunxi_nand_chip_init(dev, nfc, nand_np);
