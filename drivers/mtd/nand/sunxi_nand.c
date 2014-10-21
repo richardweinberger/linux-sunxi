@@ -201,8 +201,48 @@ struct sunxi_nand_hw_ecc {
 	struct nand_ecclayout layout;
 };
 
+/**
+ * struct sunxi_nand_part - sunxi NAND partition structure
+ *
+ * @ecc: per-partition ECC info
+ * @scrambler: per-partition randomizer info
+ */
 struct sunxi_nand_part {
 	struct nand_ecc_ctrl ecc;
+	struct nand_scrambler_ctrl scrambler;
+};
+
+/**
+ * struct sunxi_nand_hw_scrambler_config - sunxi NAND scrambler config
+ *					   structure
+ *
+ * @nseeds: number of seeds in the seed table
+ * @seeds: seed table
+ * @subseeds: pre-calculated subseeds values
+ */
+struct sunxi_nand_scrambler_config {
+	int nseeds;
+	const u16 *seeds;
+	const u16 *subseeds;
+};
+
+/**
+ * struct sunxi_nand_hw_scrambler - sunxi NAND scrambler structure
+ *
+ * @page: current page
+ * @column: current column
+ * @config: current ECC config
+ * @step: step function
+ * @left: number of remaining bytes in the page
+ * @state: current randomizer state
+ */
+struct sunxi_nand_scrambler {
+	int page;
+	int column;
+	struct sunxi_nand_scrambler_config *config;
+	u16 (*step)(struct mtd_info *mtd, u16 state, int column, int *left);
+	int left;
+	u16 state;
 };
 
 /*
@@ -262,6 +302,39 @@ static inline struct sunxi_nfc *to_sunxi_nfc(struct nand_hw_control *ctrl)
 {
 	return container_of(ctrl, struct sunxi_nfc, controller);
 }
+
+static const u16 sunxi_nfc_default_seeds[] = {
+	0x2b75, 0x0bd0, 0x5ca3, 0x62d1, 0x1c93, 0x07e9, 0x2162, 0x3a72,
+	0x0d67, 0x67f9, 0x1be7, 0x077d, 0x032f, 0x0dac, 0x2716, 0x2436,
+	0x7922, 0x1510, 0x3860, 0x5287, 0x480f, 0x4252, 0x1789, 0x5a2d,
+	0x2a49, 0x5e10, 0x437f, 0x4b4e, 0x2f45, 0x216e, 0x5cb7, 0x7130,
+	0x2a3f, 0x60e4, 0x4dc9, 0x0ef0, 0x0f52, 0x1bb9, 0x6211, 0x7a56,
+	0x226d, 0x4ea7, 0x6f36, 0x3692, 0x38bf, 0x0c62, 0x05eb, 0x4c55,
+	0x60f4, 0x728c, 0x3b6f, 0x2037, 0x7f69, 0x0936, 0x651a, 0x4ceb,
+	0x6218, 0x79f3, 0x383f, 0x18d9, 0x4f05, 0x5c82, 0x2912, 0x6f17,
+	0x6856, 0x5938, 0x1007, 0x61ab, 0x3e7f, 0x57c2, 0x542f, 0x4f62,
+	0x7454, 0x2eac, 0x7739, 0x42d4, 0x2f90, 0x435a, 0x2e52, 0x2064,
+	0x637c, 0x66ad, 0x2c90, 0x0bad, 0x759c, 0x0029, 0x0986, 0x7126,
+	0x1ca7, 0x1605, 0x386a, 0x27f5, 0x1380, 0x6d75, 0x24c3, 0x0f8e,
+	0x2b7a, 0x1418, 0x1fd1, 0x7dc1, 0x2d8e, 0x43af, 0x2267, 0x7da3,
+	0x4e3d, 0x1338, 0x50db, 0x454d, 0x764d, 0x40a3, 0x42e6, 0x262b,
+	0x2d2e, 0x1aea, 0x2e17, 0x173d, 0x3a6e, 0x71bf, 0x25f9, 0x0a5d,
+	0x7c57, 0x0fbe, 0x46ce, 0x4939, 0x6b17, 0x37bb, 0x3e91, 0x76db,
+};
+
+static struct sunxi_nand_scrambler_config sunxi_nfc_default_scrambler_conf = {
+	.seeds = sunxi_nfc_default_seeds,
+	.nseeds = ARRAY_SIZE(sunxi_nfc_default_seeds),
+};
+
+static const u16 sunxi_nfc_brom_seeds[] = {
+	0x4a80,
+};
+
+static struct sunxi_nand_scrambler_config sunxi_nfc_brom_scrambler_conf = {
+	.seeds = sunxi_nfc_brom_seeds,
+	.nseeds = ARRAY_SIZE(sunxi_nfc_brom_seeds),
+};
 
 static irqreturn_t sunxi_nfc_interrupt(int irq, void *dev_id)
 {
@@ -476,6 +549,168 @@ static void sunxi_nfc_write_buf(struct mtd_info *mtd, const uint8_t *buf,
 	}
 }
 
+static u16 sunxi_nfc_scrambler_step(struct sunxi_nand_scrambler *scrambler,
+				    u16 state, int count)
+{
+	state &= 0x7fff;
+	count *= 8;
+	while (count--)
+		state = ((state >> 1) |
+			 ((((state >> 0) ^ (state >> 1)) & 1) << 14)) & 0x7fff;
+
+	return state;
+}
+
+static u16 sunxi_nfc_scrambler_single_step(u16 state, int count)
+{
+	state &= 0x7fff;
+	while (count--)
+		state = ((state >> 1) |
+			 ((((state >> 0) ^ (state >> 1)) & 1) << 14)) & 0x7fff;
+
+	return state;
+}
+
+static int sunxi_nfc_scrambler_config(struct mtd_info *mtd, int page, int column,
+				      enum nand_scrambler_action action)
+{
+	struct nand_chip *chip = mtd->priv;
+	struct sunxi_nand_scrambler *scrambler = nand_scrambler(chip)->priv;
+	u16 state;
+
+	if (page < 0 && column < 0) {
+		scrambler->page = -1;
+		scrambler->column = -1;
+		return 0;
+	}
+
+	if (column < 0)
+		column = 0;
+	if (page < 0)
+		page = scrambler->page;
+
+	if (page < 0)
+		return -EINVAL;
+
+	state = scrambler->config->seeds[page % scrambler->config->nseeds];
+	scrambler->page = page;
+	scrambler->column = column;
+
+	if (scrambler->step) {
+		scrambler->state = scrambler->step(mtd, state, column,
+						   &scrambler->left);
+	} else {
+		scrambler->state = sunxi_nfc_scrambler_step(scrambler, state,
+							column % 4096);
+		scrambler->left = mtd->oobsize + mtd->writesize - column;
+	}
+
+	return 0;
+}
+
+static void sunxi_nfc_scrambler_write_buf(struct mtd_info *mtd,
+					  const uint8_t *buf, int len)
+{
+	struct nand_chip *nand = mtd->priv;
+	struct sunxi_nfc *nfc = to_sunxi_nfc(nand->controller);
+	struct sunxi_nand_scrambler *scrambler = nand_scrambler(nand)->priv;
+	u32 tmp = readl(nfc->regs + NFC_REG_ECC_CTL);
+	int cnt;
+	int offs = 0;
+	int scramble;
+
+	tmp &= ~(NFC_RANDOM_DIRECTION | NFC_RANDOM_SEED | NFC_RANDOM_EN);
+	writel(tmp, nfc->regs + NFC_REG_ECC_CTL);
+
+	if (scrambler->page < 0) {
+		sunxi_nfc_write_buf(mtd, buf, len);
+		return;
+	}
+
+	while (len > offs) {
+		cnt = len - offs;
+		if (cnt > 1024)
+			cnt = 1024;
+
+		scramble = nand_scrambler_is_active(mtd, scrambler->page,
+						    scrambler->column, &cnt);
+		if (scramble > 0) {
+			writel(tmp | NFC_RANDOM_EN | (scrambler->state << 16),
+			       nfc->regs + NFC_REG_ECC_CTL);
+			if (scrambler->left < cnt)
+				cnt = scrambler->left;
+		}
+
+		sunxi_nfc_write_buf(mtd, buf + offs, cnt);
+
+		if (scramble > 0)
+			writel(tmp & ~NFC_RANDOM_EN,
+			       nfc->regs + NFC_REG_ECC_CTL);
+
+		offs += cnt;
+		if (len <= offs)
+			break;
+
+		sunxi_nfc_scrambler_config(mtd, -1, scrambler->column + cnt,
+					   NAND_SCRAMBLER_WRITE);
+	}
+}
+
+static void sunxi_nfc_scrambler_read_buf(struct mtd_info *mtd, uint8_t *buf,
+					 int len)
+{
+	struct nand_chip *nand = mtd->priv;
+	struct sunxi_nfc *nfc = to_sunxi_nfc(nand->controller);
+	struct sunxi_nand_scrambler *rnd = nand_scrambler(nand)->priv;
+	u32 tmp = readl(nfc->regs + NFC_REG_ECC_CTL);
+	int cnt;
+	int offs = 0;
+	int scramble;
+
+	tmp &= ~(NFC_RANDOM_DIRECTION | NFC_RANDOM_SEED | NFC_RANDOM_EN);
+	writel(tmp, nfc->regs + NFC_REG_ECC_CTL);
+
+	if (rnd->page < 0) {
+		sunxi_nfc_read_buf(mtd, buf, len);
+		return;
+	}
+
+	while (len > offs) {
+		cnt = len - offs;
+		if (cnt > 1024)
+			cnt = 1024;
+
+		if (nand_scrambler_is_active(mtd, rnd->page,
+					     rnd->column, &cnt) > 0)
+			scramble = 1;
+		else
+			scramble = 0;
+
+		if (scramble > 0) {
+			writel(tmp | NFC_RANDOM_EN | (rnd->state << 16),
+			       nfc->regs + NFC_REG_ECC_CTL);
+			if (rnd->left < cnt)
+				cnt = rnd->left;
+		}
+
+		if (buf)
+			sunxi_nfc_read_buf(mtd, buf + offs, cnt);
+		else
+			sunxi_nfc_read_buf(mtd, NULL, cnt);
+
+		if (scramble > 0)
+			writel(tmp & ~NFC_RANDOM_EN,
+			       nfc->regs + NFC_REG_ECC_CTL);
+
+		offs += cnt;
+		if (len <= offs)
+			break;
+
+		sunxi_nfc_scrambler_config(mtd, -1, rnd->column + cnt,
+					   NAND_SCRAMBLER_READ);
+	}
+}
+
 static uint8_t sunxi_nfc_read_byte(struct mtd_info *mtd)
 {
 	uint8_t ret;
@@ -543,18 +778,43 @@ static int sunxi_nfc_hw_ecc_read_page(struct mtd_info *mtd,
 	writel(tmp, nfc->regs + NFC_REG_ECC_CTL);
 
 	for (i = 0; i < ecc->steps; i++) {
+		bool scramble = false;
+
 		if (i)
 			chip->cmdfunc(mtd, NAND_CMD_RNDOUT, i * ecc->size, -1);
 
 		offset = mtd->writesize + layout->eccpos[i * ecc->bytes] - 4;
 
-		chip->read_buf(mtd, NULL, ecc->size);
+		nand_scrambler_config(mtd, page, i * ecc->size,
+				      NAND_SCRAMBLER_READ);
+		nand_scrambler_read_buf(mtd, NULL, ecc->size);
 
 		chip->cmdfunc(mtd, NAND_CMD_RNDOUT, offset, -1);
 
 		ret = sunxi_nfc_wait_cmd_fifo_empty(nfc);
 		if (ret)
 			return ret;
+
+		if (i) {
+			cnt = ecc->bytes + 4;
+			if (nand_scrambler_is_active(mtd, page, offset,
+						     &cnt) > 0 &&
+			    cnt == ecc->bytes + 4)
+				scramble = true;
+		} else {
+			cnt = ecc->bytes + 2;
+			if (nand_scrambler_is_active(mtd, page,
+						     offset + 2, &cnt) > 0 &&
+			    cnt == ecc->bytes + 2)
+				scramble = true;
+		}
+
+		if (scramble) {
+			tmp = readl(nfc->regs + NFC_REG_ECC_CTL);
+			tmp &= ~(NFC_RANDOM_DIRECTION | NFC_ECC_EXCEPTION);
+			tmp |= NFC_RANDOM_EN;
+			writel(tmp, nfc->regs + NFC_REG_ECC_CTL);
+		}
 
 		tmp = NFC_DATA_TRANS | NFC_DATA_SWAP_METHOD | (1 << 30);
 		writel(tmp, nfc->regs + NFC_REG_CMD);
@@ -565,6 +825,9 @@ static int sunxi_nfc_hw_ecc_read_page(struct mtd_info *mtd,
 
 		memcpy_fromio(buf + (i * ecc->size),
 			      nfc->regs + NFC_RAM0_BASE, ecc->size);
+
+		writel(readl(nfc->regs + NFC_REG_ECC_CTL) & ~NFC_RANDOM_EN,
+		       nfc->regs + NFC_REG_ECC_CTL);
 
 		if (readl(nfc->regs + NFC_REG_ECC_ST) & 0x1) {
 			mtd->ecc_stats.failed++;
@@ -581,9 +844,11 @@ static int sunxi_nfc_hw_ecc_read_page(struct mtd_info *mtd,
 			if (ret)
 				return ret;
 
+			nand_scrambler_config(mtd, -1, offset,
+					      NAND_SCRAMBLER_READ);
 			offset -= mtd->writesize;
-			chip->read_buf(mtd, chip->oob_poi + offset,
-				      ecc->bytes + 4);
+			nand_scrambler_read_buf(mtd, chip->oob_poi + offset,
+					  ecc->bytes + 4);
 		}
 	}
 
@@ -593,10 +858,15 @@ static int sunxi_nfc_hw_ecc_read_page(struct mtd_info *mtd,
 			offset = mtd->writesize +
 				 ecc->layout->oobfree[ecc->steps].offset;
 			chip->cmdfunc(mtd, NAND_CMD_RNDOUT, offset, -1);
+			nand_scrambler_config(mtd, -1, offset,
+					      NAND_SCRAMBLER_READ);
 			offset -= mtd->writesize;
-			chip->read_buf(mtd, chip->oob_poi + offset, cnt);
+			nand_scrambler_read_buf(mtd, chip->oob_poi + offset,
+						cnt);
 		}
 	}
+
+	nand_scrambler_config(mtd, -1, -1, NAND_SCRAMBLER_DISABLE);
 
 	tmp = readl(nfc->regs + NFC_REG_ECC_CTL);
 	tmp &= ~NFC_ECC_EN;
@@ -614,6 +884,7 @@ static int sunxi_nfc_hw_ecc_write_page(struct mtd_info *mtd,
 	struct nand_ecc_ctrl *ecc = nand_ecc(chip);
 	struct nand_ecclayout *layout = ecc->layout;
 	struct sunxi_nand_hw_ecc *data = ecc->priv;
+	struct sunxi_nand_scrambler *scrambler = nand_scrambler(chip)->priv;
 	int offset;
 	int ret;
 	u32 tmp;
@@ -629,11 +900,13 @@ static int sunxi_nfc_hw_ecc_write_page(struct mtd_info *mtd,
 
 	for (i = 0; i < ecc->steps; i++) {
 		u32 user_data;
+		bool scramble = false;
 
 		if (i)
 			chip->cmdfunc(mtd, NAND_CMD_RNDIN, i * ecc->size, -1);
 
-		chip->write_buf(mtd, buf + (i * ecc->size), ecc->size);
+		nand_scrambler_config(mtd, -1, i * ecc->size, NAND_SCRAMBLER_WRITE);
+		nand_scrambler_write_buf(mtd, buf + (i * ecc->size), ecc->size);
 
 		offset = layout->eccpos[i * ecc->bytes] - 4 + mtd->writesize;
 
@@ -644,6 +917,47 @@ static int sunxi_nfc_hw_ecc_write_page(struct mtd_info *mtd,
 			memcpy(&user_data,
 			       chip->oob_poi + layout->oobfree[i].offset, 4);
 			user_data = le32_to_cpu(user_data);
+		}
+
+		if (i) {
+			cnt = ecc->bytes + 4;
+			if (scrambler &&
+			    nand_scrambler_is_active(mtd, -1,
+						     offset, &cnt) > 0 &&
+			    cnt == ecc->bytes + 4)
+				scramble = true;
+		} else {
+			cnt = ecc->bytes + 2;
+			if (scrambler &&
+			    nand_scrambler_is_active(mtd, -1,
+						     offset + 2, &cnt) > 0 &&
+			    cnt == ecc->bytes + 2)
+				scramble = true;
+		}
+
+		if (scramble) {
+			/* pre randomize to generate FF patterns on the NAND */
+			if (!i) {
+				int subseedidx = scrambler->page % scrambler->config->nseeds;
+				u8 oob_tmp[2];
+				u16 state;
+
+				subseedidx *= ecc->size / 512;
+				state = scrambler->config->subseeds[subseedidx];
+				oob_tmp[0] = user_data;
+				oob_tmp[1] = user_data >> 8;
+
+				state = sunxi_nfc_scrambler_single_step(state, 15);
+				oob_tmp[0] ^= state;
+				state = sunxi_nfc_scrambler_step(scrambler, state, 1);
+				oob_tmp[1] ^= state;
+				user_data &= ~0xffff;
+				user_data |= oob_tmp[0] | (oob_tmp[1] << 8);
+			}
+			tmp = readl(nfc->regs + NFC_REG_ECC_CTL);
+			tmp &= ~(NFC_RANDOM_DIRECTION | NFC_ECC_EXCEPTION);
+			tmp |= NFC_RANDOM_EN;
+			writel(tmp, nfc->regs + NFC_REG_ECC_CTL);
 		}
 
 		writel(user_data, nfc->regs + NFC_REG_USER_DATA_BASE);
@@ -660,6 +974,9 @@ static int sunxi_nfc_hw_ecc_write_page(struct mtd_info *mtd,
 		ret = sunxi_nfc_wait_int(nfc, NFC_CMD_INT_FLAG, 0);
 		if (ret)
 			return ret;
+
+		writel(readl(nfc->regs + NFC_REG_ECC_CTL) & ~NFC_RANDOM_EN,
+		       nfc->regs + NFC_REG_ECC_CTL);
 	}
 
 	if (oob_required) {
@@ -668,10 +985,13 @@ static int sunxi_nfc_hw_ecc_write_page(struct mtd_info *mtd,
 			offset = mtd->writesize +
 				 ecc->layout->oobfree[i].offset;
 			chip->cmdfunc(mtd, NAND_CMD_RNDIN, offset, -1);
+			nand_scrambler_config(mtd, -1, offset, NAND_SCRAMBLER_WRITE);
 			offset -= mtd->writesize;
-			chip->write_buf(mtd, chip->oob_poi + offset, cnt);
+			nand_scrambler_write_buf(mtd, chip->oob_poi + offset, cnt);
 		}
 	}
+
+	nand_scrambler_config(mtd, -1, -1, NAND_SCRAMBLER_DISABLE);
 
 	tmp = readl(nfc->regs + NFC_REG_ECC_CTL);
 	tmp &= ~NFC_ECC_EN;
@@ -679,6 +999,36 @@ static int sunxi_nfc_hw_ecc_write_page(struct mtd_info *mtd,
 	writel(tmp, nfc->regs + NFC_REG_ECC_CTL);
 
 	return 0;
+}
+
+static u16 sunxi_nfc_hw_ecc_rnd_steps(struct mtd_info *mtd, u16 state,
+				      int column, int *left)
+{
+	struct nand_chip *chip = mtd->priv;
+	struct nand_ecc_ctrl *ecc = nand_ecc(chip);
+	struct sunxi_nand_scrambler *scrambler = nand_scrambler(chip)->priv;
+	int nblks = mtd->writesize / ecc->size;
+	int modsize = ecc->size;
+	int steps;
+
+	if (column < mtd->writesize) {
+		steps = column % modsize;
+		*left = modsize - steps;
+	} else if (column < mtd->writesize +
+			    (nblks * (ecc->bytes + 4))) {
+		int subseedidx = scrambler->page % scrambler->config->nseeds;
+
+		column -= mtd->writesize;
+		steps = column % (ecc->bytes + 4);
+		*left = ecc->bytes + 4 - steps;
+		subseedidx *= ecc->size / 512;
+		state = scrambler->config->subseeds[subseedidx];
+	} else {
+		steps = column % 4096;
+		*left = mtd->writesize + mtd->oobsize - column;
+	}
+
+	return sunxi_nfc_scrambler_step(scrambler, state, steps);
 }
 
 static int sunxi_nfc_hw_syndrome_ecc_read_page(struct mtd_info *mtd,
@@ -705,7 +1055,17 @@ static int sunxi_nfc_hw_syndrome_ecc_read_page(struct mtd_info *mtd,
 	writel(tmp, nfc->regs + NFC_REG_ECC_CTL);
 
 	for (i = 0; i < ecc->steps; i++) {
-		chip->read_buf(mtd, NULL, ecc->size);
+		nand_scrambler_config(mtd, page, offset, NAND_SCRAMBLER_READ);
+		nand_scrambler_read_buf(mtd, NULL, ecc->size);
+
+		cnt = ecc->bytes + 4;
+		if (nand_scrambler_is_active(mtd, page, offset, &cnt) > 0 &&
+		    cnt == ecc->bytes + 4) {
+			tmp = readl(nfc->regs + NFC_REG_ECC_CTL);
+			tmp &= ~(NFC_RANDOM_DIRECTION | NFC_ECC_EXCEPTION);
+			tmp |= NFC_RANDOM_EN;
+			writel(tmp, nfc->regs + NFC_REG_ECC_CTL);
+		}
 
 		tmp = NFC_DATA_TRANS | NFC_DATA_SWAP_METHOD | (1 << 30);
 		writel(tmp, nfc->regs + NFC_REG_CMD);
@@ -718,6 +1078,9 @@ static int sunxi_nfc_hw_syndrome_ecc_read_page(struct mtd_info *mtd,
 		buf += ecc->size;
 		offset += ecc->size;
 
+		writel(readl(nfc->regs + NFC_REG_ECC_CTL) & ~NFC_RANDOM_EN,
+		       nfc->regs + NFC_REG_ECC_CTL);
+
 		if (readl(nfc->regs + NFC_REG_ECC_ST) & 0x1) {
 			mtd->ecc_stats.failed++;
 		} else {
@@ -728,7 +1091,8 @@ static int sunxi_nfc_hw_syndrome_ecc_read_page(struct mtd_info *mtd,
 
 		if (oob_required) {
 			chip->cmdfunc(mtd, NAND_CMD_RNDOUT, offset, -1);
-			chip->read_buf(mtd, oob, ecc->bytes + ecc->prepad);
+			nand_scrambler_config(mtd, -1, offset, NAND_SCRAMBLER_READ);
+			nand_scrambler_read_buf(mtd, oob, ecc->bytes + ecc->prepad);
 			oob += ecc->bytes + ecc->prepad;
 		}
 
@@ -739,9 +1103,12 @@ static int sunxi_nfc_hw_syndrome_ecc_read_page(struct mtd_info *mtd,
 		cnt = mtd->oobsize - (oob - chip->oob_poi);
 		if (cnt > 0) {
 			chip->cmdfunc(mtd, NAND_CMD_RNDOUT, offset, -1);
-			chip->read_buf(mtd, oob, cnt);
+			nand_scrambler_config(mtd, page, offset, NAND_SCRAMBLER_READ);
+			nand_scrambler_read_buf(mtd, oob, cnt);
 		}
 	}
+
+	nand_scrambler_config(mtd, -1, -1, NAND_SCRAMBLER_DISABLE);
 
 	writel(readl(nfc->regs + NFC_REG_ECC_CTL) & ~NFC_ECC_EN,
 	       nfc->regs + NFC_REG_ECC_CTL);
@@ -757,6 +1124,7 @@ static int sunxi_nfc_hw_syndrome_ecc_write_page(struct mtd_info *mtd,
 	struct sunxi_nfc *nfc = to_sunxi_nfc(chip->controller);
 	struct nand_ecc_ctrl *ecc = nand_ecc(chip);
 	struct sunxi_nand_hw_ecc *data = ecc->priv;
+	struct sunxi_nand_scrambler *rnd = nand_scrambler(chip)->priv;
 	uint8_t *oob = chip->oob_poi;
 	int offset = 0;
 	int ret;
@@ -772,7 +1140,8 @@ static int sunxi_nfc_hw_syndrome_ecc_write_page(struct mtd_info *mtd,
 	writel(tmp, nfc->regs + NFC_REG_ECC_CTL);
 
 	for (i = 0; i < ecc->steps; i++) {
-		chip->write_buf(mtd, buf + (i * ecc->size), ecc->size);
+		nand_scrambler_config(mtd, -1, offset, NAND_SCRAMBLER_WRITE);
+		nand_scrambler_write_buf(mtd, buf + (i * ecc->size), ecc->size);
 		offset += ecc->size;
 
 		/* Fill OOB data in */
@@ -785,6 +1154,17 @@ static int sunxi_nfc_hw_syndrome_ecc_write_page(struct mtd_info *mtd,
 
 		writel(tmp, nfc->regs + NFC_REG_USER_DATA_BASE);
 
+		cnt = ecc->bytes + 4;
+		if (rnd &&
+		    nand_scrambler_is_active(mtd, rnd->page,
+					     offset, &cnt) > 0 &&
+		    cnt == ecc->bytes + 4) {
+			tmp = readl(nfc->regs + NFC_REG_ECC_CTL);
+			tmp &= ~(NFC_RANDOM_DIRECTION | NFC_ECC_EXCEPTION);
+			tmp |= NFC_RANDOM_EN;
+			writel(tmp, nfc->regs + NFC_REG_ECC_CTL);
+		}
+
 		tmp = NFC_DATA_TRANS | NFC_DATA_SWAP_METHOD | NFC_ACCESS_DIR |
 		      (1 << 30);
 		writel(tmp, nfc->regs + NFC_REG_CMD);
@@ -792,6 +1172,9 @@ static int sunxi_nfc_hw_syndrome_ecc_write_page(struct mtd_info *mtd,
 		ret = sunxi_nfc_wait_int(nfc, NFC_CMD_INT_FLAG, 0);
 		if (ret)
 			return ret;
+
+		writel(readl(nfc->regs + NFC_REG_ECC_CTL) & ~NFC_RANDOM_EN,
+		       nfc->regs + NFC_REG_ECC_CTL);
 
 		offset += ecc->bytes + ecc->prepad;
 		oob += ecc->bytes + ecc->prepad;
@@ -801,9 +1184,11 @@ static int sunxi_nfc_hw_syndrome_ecc_write_page(struct mtd_info *mtd,
 		cnt = mtd->oobsize - (oob - chip->oob_poi);
 		if (cnt > 0) {
 			chip->cmdfunc(mtd, NAND_CMD_RNDIN, offset, -1);
-			chip->write_buf(mtd, oob, cnt);
+			nand_scrambler_config(mtd, -1, offset, NAND_SCRAMBLER_WRITE);
+			nand_scrambler_write_buf(mtd, oob, cnt);
 		}
 	}
+	nand_scrambler_config(mtd, -1, -1, NAND_SCRAMBLER_DISABLE);
 
 	tmp = readl(nfc->regs + NFC_REG_ECC_CTL);
 	tmp &= ~NFC_ECC_EN;
@@ -811,6 +1196,125 @@ static int sunxi_nfc_hw_syndrome_ecc_write_page(struct mtd_info *mtd,
 	writel(tmp, nfc->regs + NFC_REG_ECC_CTL);
 
 	return 0;
+}
+
+static u16 sunxi_nfc_hw_syndrome_ecc_rnd_steps(struct mtd_info *mtd, u16 state,
+					       int column, int *left)
+{
+	struct nand_chip *chip = mtd->priv;
+	struct nand_ecc_ctrl *ecc = nand_ecc(chip);
+	struct sunxi_nand_scrambler *scrambler = nand_scrambler(chip)->priv;
+	int eccsteps = mtd->writesize / ecc->size;
+	int modsize = ecc->size + ecc->prepad + ecc->bytes;
+	int steps;
+
+	if (column < (eccsteps * modsize)) {
+		steps = column % modsize;
+		*left = modsize - steps;
+		if (steps >= ecc->size) {
+			int subseedidx = scrambler->page %
+					 scrambler->config->nseeds;
+
+			steps -= ecc->size;
+			subseedidx *= ecc->size / 512;
+			state = scrambler->config->subseeds[subseedidx];
+		}
+	} else {
+		steps = column % 4096;
+		*left = mtd->writesize + mtd->oobsize - column;
+	}
+
+	return sunxi_nfc_scrambler_step(scrambler, state, steps);
+}
+
+static void sunxi_nand_scrambler_cleanup(struct nand_scrambler_ctrl *scrambler)
+{
+	struct sunxi_nand_scrambler *sscrambler = scrambler->priv;
+
+	kfree(scrambler->layout);
+	kfree(sscrambler);
+}
+
+static const struct nand_scrambler_ops sunxi_nfc_scrambler_ops = {
+	.config = sunxi_nfc_scrambler_config,
+	.read_buf = sunxi_nfc_scrambler_read_buf,
+	.write_buf = sunxi_nfc_scrambler_write_buf,
+};
+
+static int sunxi_nand_scrambler_init(struct mtd_info *mtd,
+				     struct nand_scrambler_ctrl *scrambler,
+				     struct nand_ecc_ctrl *ecc,
+				     struct device_node *np)
+{
+	struct sunxi_nand_scrambler_config *config;
+	struct sunxi_nand_scrambler *sscrambler;
+	struct nand_scrambler_layout *layout = NULL;
+	const char *conf_name;
+	int ret;
+
+	if (of_property_read_string(np, "allwinner,scrambler-config",
+				    &conf_name))
+		return 0;
+
+	if (!strcmp(conf_name, "default"))
+		config = &sunxi_nfc_default_scrambler_conf;
+	else if (!strcmp(conf_name, "brom"))
+		config = &sunxi_nfc_brom_scrambler_conf;
+	else
+		return -EINVAL;
+
+	sscrambler = kzalloc(sizeof(*sscrambler), GFP_KERNEL);
+	if (!sscrambler)
+		return -ENOMEM;
+
+	sscrambler->config = config;
+
+	switch (ecc->mode) {
+	case NAND_ECC_HW_SYNDROME:
+		sscrambler->step = sunxi_nfc_hw_syndrome_ecc_rnd_steps;
+		layout = kzalloc(sizeof(*layout) +
+				 sizeof(struct nand_scrambler_range),
+				 GFP_KERNEL);
+		if (!layout) {
+			ret = -ENOMEM;
+			goto err;
+		}
+		layout->nranges = 1;
+		layout->ranges[0].offset = 0;
+		layout->ranges[0].length = mtd->writesize + mtd->oobsize;
+		scrambler->layout = layout;
+		break;
+
+	case NAND_ECC_HW:
+		sscrambler->step = sunxi_nfc_hw_ecc_rnd_steps;
+
+	default:
+		layout = kzalloc(sizeof(*layout) +
+				 (sizeof(struct nand_scrambler_range) * 2),
+				 GFP_KERNEL);
+		if (!layout) {
+			ret = -ENOMEM;
+			goto err;
+		}
+		layout->nranges = 2;
+		layout->ranges[0].offset = 0;
+		layout->ranges[0].length = mtd->writesize;
+		layout->ranges[1].offset = mtd->writesize + 2;
+		layout->ranges[1].length = mtd->oobsize - 2;
+		scrambler->layout = layout;
+		break;
+	}
+
+	scrambler->ops = &sunxi_nfc_scrambler_ops;
+	scrambler->priv = sscrambler;
+
+	return 0;
+
+err:
+	kfree(sscrambler);
+	kfree(layout);
+
+	return ret;
 }
 
 static int sunxi_nand_chip_set_timings(struct sunxi_nand_chip *chip,
@@ -1075,6 +1579,9 @@ static int sunxi_nand_hw_syndrome_ecc_ctrl_init(struct mtd_info *mtd,
 
 static void sunxi_nand_ecc_cleanup(struct nand_ecc_ctrl *ecc)
 {
+	if (!ecc)
+		return;
+
 	switch (ecc->mode) {
 	case NAND_ECC_HW:
 	case NAND_ECC_HW_SYNDROME:
@@ -1144,6 +1651,7 @@ static int sunxi_nand_ecc_init(struct mtd_info *mtd, struct nand_ecc_ctrl *ecc,
 static int sunxi_nand_part_add(struct mtd_part *part)
 {
 	struct nand_part *npart = mtd_part_get_priv(part);
+	struct nand_chip *chip = part->master->priv;
 	struct device_node *np = part->mtd.dev.of_node;
 	struct sunxi_nand_part *spart;
 	int ret;
@@ -1161,17 +1669,32 @@ static int sunxi_nand_part_add(struct mtd_part *part)
 	 */
 	if (of_get_nand_ecc_mode(np) >= 0) {
 		ret = sunxi_nand_ecc_init(&part->mtd, &spart->ecc, np);
-		if (ret) {
-			kfree(spart);
-			return ret;
-		}
+		if (ret)
+			goto err;
 
 		npart->ecc = &spart->ecc;
+	}
+
+	if (of_find_property(np, "allwinner,randomizer-config", NULL)) {
+		ret = sunxi_nand_scrambler_init(&part->mtd, &spart->scrambler,
+						npart->ecc ?: &chip->ecc, np);
+		if (ret)
+			goto err_ecc_cleanup;
+
+		npart->scrambler = &spart->scrambler;
 	}
 
 	nand_part_set_priv(npart, spart);
 
 	return 0;
+
+err_ecc_cleanup:
+	sunxi_nand_ecc_cleanup(npart->ecc);
+
+err:
+	kfree(spart);
+
+	return ret;
 }
 
 static void sunxi_nand_part_remove(struct mtd_part *part)
@@ -1318,6 +1841,10 @@ static int sunxi_nand_chip_init(struct device *dev, struct sunxi_nfc *nfc,
 		return ret;
 	}
 
+	ret = sunxi_nand_scrambler_init(mtd, &nand->scrambler, &nand->ecc, np);
+	if (ret)
+		return ret;
+
 	ret = nand_scan_tail(mtd);
 	if (ret) {
 		dev_err(dev, "nand_scan_tail failed: %d\n", ret);
@@ -1367,7 +1894,32 @@ static void sunxi_nand_chips_cleanup(struct sunxi_nfc *nfc)
 					node);
 		nand_release(&chip->mtd);
 		sunxi_nand_ecc_cleanup(&chip->nand.ecc);
+		sunxi_nand_scrambler_cleanup(&chip->nand.scrambler);
 	}
+}
+
+static int sunxi_nfc_subseeds_init(struct sunxi_nand_scrambler_config *conf)
+{
+	u16 *subseeds;
+	int i;
+
+	subseeds = kzalloc(conf->nseeds * 2 * sizeof(*subseeds), GFP_KERNEL);
+	if (!subseeds)
+		return -ENOMEM;
+
+	for (i = 0; i < conf->nseeds; i += 2) {
+		subseeds[i] = sunxi_nfc_scrambler_single_step(conf->seeds[i],
+							      512 * 8);
+		subseeds[i + 1] = sunxi_nfc_scrambler_single_step(subseeds[i],
+								  512 * 8);
+	}
+
+	return 0;
+}
+
+static void sunxi_nfc_subseeds_cleanup(struct sunxi_nand_scrambler_config *conf)
+{
+	kfree(conf->subseeds);
 }
 
 static int sunxi_nfc_probe(struct platform_device *pdev)
@@ -1381,6 +1933,14 @@ static int sunxi_nfc_probe(struct platform_device *pdev)
 	nfc = devm_kzalloc(dev, sizeof(*nfc), GFP_KERNEL);
 	if (!nfc)
 		return -ENOMEM;
+
+	ret = sunxi_nfc_subseeds_init(&sunxi_nfc_brom_scrambler_conf);
+	if (ret)
+		return ret;
+
+	ret = sunxi_nfc_subseeds_init(&sunxi_nfc_default_scrambler_conf);
+	if (ret)
+		return ret;
 
 	nfc->dev = dev;
 	spin_lock_init(&nfc->controller.lock);
@@ -1459,6 +2019,8 @@ static int sunxi_nfc_remove(struct platform_device *pdev)
 	struct sunxi_nfc *nfc = platform_get_drvdata(pdev);
 
 	sunxi_nand_chips_cleanup(nfc);
+	sunxi_nfc_subseeds_cleanup(&sunxi_nfc_default_scrambler_conf);
+	sunxi_nfc_subseeds_cleanup(&sunxi_nfc_brom_scrambler_conf);
 
 	return 0;
 }
