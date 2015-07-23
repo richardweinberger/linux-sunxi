@@ -1030,4 +1030,9 @@ struct nand_sdr_timings {
 
 /* get timing characteristics from ONFI timing mode. */
 const struct nand_sdr_timings *onfi_async_timing_mode_to_sdr_timings(int mode);
+
+static inline struct nand_ecc_ctrl *nand_ecc(struct nand_chip *chip)
+{
+	return &chip->ecc;
+}
 #endif /* __LINUX_MTD_NAND_H */
