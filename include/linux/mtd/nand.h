@@ -538,6 +538,28 @@ struct nand_buffers {
 	uint8_t *databuf;
 };
 
+struct nand_part {
+	struct nand_ecc_ctrl *ecc;
+	void *priv;
+};
+
+static inline void *nand_part_get_priv(struct nand_part *part)
+{
+	return part->priv;
+}
+
+static inline void nand_part_set_priv(struct nand_part *part, void *priv)
+{
+	part->priv = priv;
+}
+
+struct nand_part_ops {
+	int (*add)(struct mtd_part *part);
+	void (*remove)(struct mtd_part *part);
+	void (*select)(struct mtd_part *part);
+	void (*deselect)(struct mtd_part *part);
+};
+
 /**
  * struct nand_chip - NAND Private Flash Chip Data
  * @IO_ADDR_R:		[BOARDSPECIFIC] address to read the 8 I/O lines of the
@@ -676,6 +698,7 @@ struct nand_chip {
 	int (*onfi_get_features)(struct mtd_info *mtd, struct nand_chip *chip,
 			int feature_addr, uint8_t *subfeature_para);
 	int (*setup_read_retry)(struct mtd_info *mtd, int retry_mode);
+	int (*select_part)(struct mtd_info *master, struct mtd_info *slave);
 
 	int chip_delay;
 	unsigned int options;
@@ -723,6 +746,9 @@ struct nand_chip {
 	struct nand_bbt_descr *badblock_pattern;
 
 	void *priv;
+
+	const struct nand_part_ops *part_ops;
+	struct mtd_part *cur_part;
 };
 
 /*
@@ -1033,6 +1059,13 @@ const struct nand_sdr_timings *onfi_async_timing_mode_to_sdr_timings(int mode);
 
 static inline struct nand_ecc_ctrl *nand_ecc(struct nand_chip *chip)
 {
-	return &chip->ecc;
+	struct nand_part *npart;
+
+	if (!chip->cur_part)
+		return &chip->ecc;
+
+	npart = chip->cur_part->mtd.priv;
+
+	return npart->ecc;
 }
 #endif /* __LINUX_MTD_NAND_H */
