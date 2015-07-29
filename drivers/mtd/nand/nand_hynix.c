@@ -211,24 +211,26 @@ static int h27q_init(struct mtd_info *mtd, const uint8_t *id)
 
 	ret = h27q_get_best_val(buf, 8, 5);
 	if (ret < 0)
-		goto leave;
+		goto err;
 	total_rr_count = ret;
 
 	ret = h27q_get_best_val(buf + 8, 8, 5);
 	if (ret < 0)
-		goto leave;
+		goto err;
 	rr_reg_count = ret;
 
 	if (rr_reg_count != sizeof(h27q_read_retry_regs)) {
 		ret = -EINVAL;
-		goto leave;
+		goto err;
 	}
 
 	hynix = kzalloc(sizeof(*hynix) +
 			(total_rr_count * rr_reg_count),
 			GFP_KERNEL);
-	if (!hynix)
-		goto leave;
+	if (!hynix) {
+		ret = -ENOMEM;
+		goto err;
+	}
 
 	for (i = 0; i < total_rr_count; i++) {
 		for (j = 0; j < rr_reg_count; j++) {
@@ -258,10 +260,12 @@ static int h27q_init(struct mtd_info *mtd, const uint8_t *id)
 			ret = h27q_get_best_val(tmp_buf, H27Q_RR_TABLE_NSETS,
 						5);
 			if (ret < 0)
-				goto leave;
+				goto err;
 			hynix->read_retry.values[(i * rr_reg_count) + j] = ~ret;
 		}
 	}
+
+	kfree(buf);
 
 	hynix->read_retry.nregs = rr_reg_count;
 	hynix->read_retry.regs = h27q_read_retry_regs;
@@ -270,13 +274,11 @@ static int h27q_init(struct mtd_info *mtd, const uint8_t *id)
 	chip->read_retries = total_rr_count;
 	chip->manuf_cleanup = h27_cleanup;
 
-leave:
-	kfree(buf);
+	return 0;
 
-	if (ret)
-		kfree(hynix);
-	else
-		pr_info("Read retry init succeed!");
+err:
+	kfree(buf);
+	kfree(hynix);
 
 	return ret;
 }
