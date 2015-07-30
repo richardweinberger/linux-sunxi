@@ -38,7 +38,10 @@ static int parse_ofpart_partitions(struct mtd_info *master,
 	if (!data)
 		return 0;
 
-	node = data->of_node;
+	node = of_get_child_by_name(data->of_node, "partitions");
+	if (!node)
+		node = data->of_node;
+
 	if (!node)
 		return 0;
 
