@@ -1490,6 +1490,19 @@ static int nand_read_subpage(struct mtd_info *mtd, struct nand_chip *chip,
 			&chip->buffers->ecccode[i],
 			&chip->buffers->ecccalc[i]);
 		if (stat < 0) {
+			/* check for empty pages with bitflips */
+			int col = (int)(p - bufpoi);
+
+			chip->cmdfunc(mtd, NAND_CMD_RNDOUT, col, -1);
+			chip->read_buf(mtd, p, nand_ecc(chip)->size);
+			stat = nand_check_erased_ecc_chunk(p, nand_ecc(chip)->size,
+						&chip->buffers->ecccode[i],
+						nand_ecc(chip)->bytes,
+						NULL, 0,
+						nand_ecc(chip)->strength);
+		}
+
+		if (stat < 0) {
 			mtd->ecc_stats.failed++;
 		} else {
 			mtd->ecc_stats.corrected += stat;
@@ -1544,6 +1557,16 @@ static int nand_read_page_hwecc(struct mtd_info *mtd, struct nand_chip *chip,
 
 		stat = nand_ecc(chip)->correct(mtd, p, &ecc_code[i],
 					       &ecc_calc[i]);
+		if (stat < 0) {
+			/* check for empty pages with bitflips */
+			chip->cmdfunc(mtd, NAND_CMD_RNDOUT, i, -1);
+			chip->read_buf(mtd, p, eccsize);
+			stat = nand_check_erased_ecc_chunk(p, eccsize,
+						&ecc_code[i], eccbytes,
+						NULL, 0,
+						nand_ecc(chip)->strength);
+		}
+
 		if (stat < 0) {
 			mtd->ecc_stats.failed++;
 		} else {
@@ -1600,7 +1623,18 @@ static int nand_read_page_hwecc_oob_first(struct mtd_info *mtd,
 		nand_scrambler_read_buf(mtd, p, eccsize);
 		nand_ecc(chip)->calculate(mtd, p, &ecc_calc[i]);
 
-		stat = nand_ecc(chip)->correct(mtd, p, &ecc_code[i], NULL);
+		stat = nand_ecc(chip)->correct(mtd, p, &ecc_code[i], &ecc_calc[i]);
+		if (stat < 0) {
+			/* check for empty pages with bitflips */
+			chip->cmdfunc(mtd, NAND_CMD_RNDOUT,
+				      i + mtd->oobsize, -1);
+			chip->read_buf(mtd, p, eccsize);
+			stat = nand_check_erased_ecc_chunk(p, eccsize,
+						&ecc_code[i], eccbytes,
+						NULL, 0,
+						nand_ecc(chip)->strength);
+		}
+
 		if (stat < 0) {
 			mtd->ecc_stats.failed++;
 		} else {
@@ -1629,6 +1663,8 @@ static int nand_read_page_syndrome(struct mtd_info *mtd, struct nand_chip *chip,
 	int i, eccsize = nand_ecc(chip)->size;
 	int eccbytes = nand_ecc(chip)->bytes;
 	int eccsteps = nand_ecc(chip)->steps;
+	int eccstepsize = eccsize + eccbytes + nand_ecc(chip)->prepad +
+			  nand_ecc(chip)->postpad;
 	uint8_t *p = buf;
 	uint8_t *oob = chip->oob_poi;
 	unsigned int max_bitflips = 0;
@@ -1656,13 +1692,6 @@ static int nand_read_page_syndrome(struct mtd_info *mtd, struct nand_chip *chip,
 		column += eccbytes;
 		stat = nand_ecc(chip)->correct(mtd, p, oob, NULL);
 
-		if (stat < 0) {
-			mtd->ecc_stats.failed++;
-		} else {
-			mtd->ecc_stats.corrected += stat;
-			max_bitflips = max_t(unsigned int, max_bitflips, stat);
-		}
-
 		oob += eccbytes;
 
 		if (nand_ecc(chip)->postpad) {
@@ -1672,6 +1701,24 @@ static int nand_read_page_syndrome(struct mtd_info *mtd, struct nand_chip *chip,
 						nand_ecc(chip)->postpad);
 			column += nand_ecc(chip)->postpad;
 			oob += nand_ecc(chip)->postpad;
+		}
+
+		if (stat < 0) {
+			/* check for empty pages with bitflips */
+			chip->cmdfunc(mtd, NAND_CMD_RNDOUT, i * eccstepsize, -1);
+			chip->read_buf(mtd, p, nand_ecc(chip)->size);
+			stat = nand_check_erased_ecc_chunk(p, nand_ecc(chip)->size,
+							   oob - eccstepsize,
+							   eccstepsize,
+							   NULL, 0,
+							   nand_ecc(chip)->strength);
+		}
+
+		if (stat < 0) {
+			mtd->ecc_stats.failed++;
+		} else {
+			mtd->ecc_stats.corrected += stat;
+			max_bitflips = max_t(unsigned int, max_bitflips, stat);
 		}
 	}
 
