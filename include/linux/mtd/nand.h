@@ -1138,7 +1138,6 @@ static inline struct nand_ecc_ctrl *nand_ecc(struct nand_chip *chip)
 	return npart->ecc;
 }
 
-
 static inline struct nand_scrambler_ctrl *nand_scrambler(struct nand_chip *chip)
 {
 	struct nand_part *npart;
@@ -1190,4 +1189,12 @@ static inline void nand_scrambler_read_buf(struct mtd_info *mtd,
 
 int nand_scrambler_is_active(struct mtd_info *mtd, int page, int column,
 			     int *len);
+
+int nand_check_erased_buf(void *data, int datalen,
+			  int threshold);
+
+int nand_check_erased_ecc_chunk(void *data, int datalen,
+				void *ecc, int ecclen,
+				void *extraoob, int extraooblen,
+				int threshold);
 #endif /* __LINUX_MTD_NAND_H */
