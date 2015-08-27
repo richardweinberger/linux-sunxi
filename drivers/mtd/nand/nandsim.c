@@ -105,8 +105,10 @@ static unsigned int bitflips = 0;
 static char *gravepages = NULL;
 static unsigned int overridesize = 0;
 static char *cache_file = NULL;
+static char *cache_status_file = NULL;
 static unsigned int bbt;
 static unsigned int bch;
+static u32 poweroff;
 static u_char id_bytes[8] = {
 	[0] = CONFIG_NANDSIM_FIRST_ID_BYTE,
 	[1] = CONFIG_NANDSIM_SECOND_ID_BYTE,
@@ -137,6 +139,7 @@ module_param(bitflips,       uint, 0400);
 module_param(gravepages,     charp, 0400);
 module_param(overridesize,   uint, 0400);
 module_param(cache_file,     charp, 0400);
+module_param(cache_status_file, charp, 0400);
 module_param(bbt,	     uint, 0400);
 module_param(bch,	     uint, 0400);
 
@@ -171,6 +174,7 @@ MODULE_PARM_DESC(overridesize,   "Specifies the NAND Flash size overriding the I
 				 "The size is specified in erase blocks and as the exponent of a power of two"
 				 " e.g. 5 means a size of 32 erase blocks");
 MODULE_PARM_DESC(cache_file,     "File to use to cache nand pages instead of memory");
+MODULE_PARM_DESC(cache_status_file, "File to use to cache nand pages status instead of memory");
 MODULE_PARM_DESC(bbt,		 "0 OOB, 1 BBT with marker in OOB, 2 BBT with marker in data area");
 MODULE_PARM_DESC(bch,		 "Enable BCH ecc and set how many bits should "
 				 "be correctable in 512-byte blocks");
@@ -270,7 +274,10 @@ MODULE_PARM_DESC(bch,		 "Enable BCH ecc and set how many bits should "
 #define OPT_PAGE2048     0x00000008 /* 2048-byte page chips */
 #define OPT_PAGE512_8BIT 0x00000040 /* 512-byte page chips with 8-bit bus width */
 #define OPT_PAGE4096     0x00000080 /* 4096-byte page chips */
-#define OPT_LARGEPAGE    (OPT_PAGE2048 | OPT_PAGE4096) /* 2048 & 4096-byte page chips */
+#define OPT_PAGE8192     0x00000100 /* 8192-byte page chips */
+#define OPT_PAGE16384    0x00000200 /* 16384-byte page chips */
+#define OPT_LARGEPAGE    (OPT_PAGE2048 | OPT_PAGE4096 | \
+			  OPT_PAGE8192 | OPT_PAGE16384) /* 2048 & 4096-byte page chips */
 #define OPT_SMALLPAGE    (OPT_PAGE512) /* 512-byte page chips */
 
 /* Remove action bits from state */
@@ -289,6 +296,7 @@ MODULE_PARM_DESC(bch,		 "Enable BCH ecc and set how many bits should "
 struct nandsim_debug_info {
 	struct dentry *dfs_root;
 	struct dentry *dfs_wear_report;
+	struct dentry *dfs_poweroff;
 };
 
 /*
@@ -365,10 +373,12 @@ struct nandsim {
 
 	/* Fields needed when using a cache file */
 	struct file *cfile; /* Open file */
+	struct file *cstatusfile; /* Open status file */
 	unsigned long *pages_written; /* Which pages have been written */
 	void *file_buf;
 	struct page *held_pages[NS_MAX_HELD_PAGES];
 	int held_cnt;
+	bool is_mlc;
 
 	struct nandsim_debug_info dbg;
 };
@@ -546,6 +556,12 @@ static int nandsim_debugfs_create(struct nandsim *dev)
 		goto out_remove;
 	dbg->dfs_wear_report = dent;
 
+	dent = debugfs_create_bool("poweroff", S_IWUSR | S_IRUSR, dbg->dfs_root,
+				   &poweroff);
+	if (IS_ERR_OR_NULL(dent))
+		goto out_remove;
+	dbg->dfs_poweroff = dent;
+
 	return 0;
 
 out_remove:
@@ -562,6 +578,8 @@ static void nandsim_debugfs_remove(struct nandsim *ns)
 	if (IS_ENABLED(CONFIG_DEBUG_FS))
 		debugfs_remove_recursive(ns->dbg.dfs_root);
 }
+
+static ssize_t read_file(struct nandsim *ns, struct file *file, void *buf, size_t count, loff_t pos);
 
 /*
  * Allocate array of page pointers, create slab allocation for an array
@@ -602,6 +620,31 @@ static int alloc_device(struct nandsim *ns)
 			goto err_free;
 		}
 		ns->cfile = cfile;
+
+		if (cache_status_file) {
+			ssize_t ret;
+			cfile = filp_open(cache_status_file,
+					  O_CREAT | O_RDWR | O_LARGEFILE,
+					  0600);
+			if (IS_ERR(cfile))
+				return PTR_ERR(cfile);
+			if (!(cfile->f_mode & FMODE_CAN_READ)) {
+				NS_ERR("alloc_device: cache status file not readable\n");
+				err = -EINVAL;
+				goto err_close;
+			}
+			if (!(cfile->f_mode & FMODE_CAN_WRITE)) {
+				NS_ERR("alloc_device: cache status file not writeable\n");
+				err = -EINVAL;
+				goto err_close;
+			}
+
+			ret = read_file(ns, cfile, ns->pages_written, BITS_TO_LONGS(ns->geom.pgnum) *
+				  sizeof(unsigned long), 0);
+			pr_info("cstatusfile ret = %d\n", ret);
+			ns->cstatusfile = cfile;
+			return 0;
+		}
 		return 0;
 	}
 
@@ -703,6 +746,10 @@ static int init_nandsim(struct mtd_info *mtd)
 		ns->options |= OPT_PAGE2048;
 	} else if (ns->geom.pgsz == 4096) {
 		ns->options |= OPT_PAGE4096;
+	} else if (ns->geom.pgsz == 8192) {
+		ns->options |= OPT_PAGE8192;
+	} else if (ns->geom.pgsz == 16384) {
+		ns->options |= OPT_PAGE16384;
 	} else {
 		NS_ERR("init_nandsim: unknown page size %u\n", ns->geom.pgsz);
 		return -EIO;
@@ -1517,32 +1564,92 @@ static void read_page(struct nandsim *ns, int num)
 	}
 }
 
+static int get_paired_page(struct nandsim *ns)
+{
+	unsigned int page = ns->regs.row % ns->geom.pgsec;
+	unsigned int base = ns->regs.row - page;
+
+	if (!ns->is_mlc)
+		return -1;
+
+	if (page < 2)
+		return -1;
+
+	if (page == 0xff || page == 2)
+		return base + page - 2;
+
+	if (page % 2)
+		return -1;
+
+	return base + page - 3;
+}
+
+static int poweroff_error(struct nandsim *ns) {
+	unsigned int page = ns->regs.row % ns->geom.pgsec;
+	unsigned int base = ns->regs.row - page;
+	int ret = poweroff;
+
+	if ((get_paired_page(ns) - base) != 0 &&
+	    (get_paired_page(ns) -base) != 1)
+		return 0;
+
+	poweroff = 0;
+
+	if (ret)
+		pr_info("Poweroff emulation occured\n");
+
+	return ret;
+}
+
 /*
  * Erase all pages in the specified sector.
  */
 static void erase_sector(struct nandsim *ns)
 {
 	union ns_mem *mypage;
+	int poweroff_err;
 	int i;
 
+	poweroff_err = poweroff_error(ns);
+
 	if (ns->cfile) {
-		for (i = 0; i < ns->geom.pgsec; i++)
-			if (__test_and_clear_bit(ns->regs.row + i,
-						 ns->pages_written)) {
+		for (i = 0; i < ns->geom.pgsec; i++) {
+			if (poweroff_err) {
+				loff_t pos = (loff_t)(ns->regs.row + i) * ns->geom.pgszoob;
+				prandom_bytes(ns->file_buf, ns->geom.pgszoob);
+				write_file(ns, ns->cfile, ns->file_buf, ns->geom.pgszoob, pos);
+				set_bit(ns->regs.row + i, ns->pages_written);
+			} else if (__test_and_clear_bit(ns->regs.row + i,
+							ns->pages_written)) {
 				NS_DBG("erase_sector: freeing page %d\n", ns->regs.row + i);
 			}
+			if (ns->cstatusfile) {
+				loff_t pos = (ns->regs.row + i) / BITS_PER_LONG;
+				write_file(ns, ns->cstatusfile,
+					   ns->pages_written + pos, sizeof(unsigned long),
+					   pos * sizeof(unsigned long));
+			}
+			BUG_ON(poweroff_err);
+		}
 		return;
 	}
 
 	mypage = NS_GET_PAGE(ns);
 	for (i = 0; i < ns->geom.pgsec; i++) {
-		if (mypage->byte != NULL) {
+		if (poweroff_err) {
+			if (!mypage->byte) {
+				mypage->byte = kmem_cache_alloc(ns->nand_pages_slab, GFP_NOFS);
+				if (mypage->byte)
+					prandom_bytes(mypage->byte, ns->geom.pgszoob);
+			}
+		} else if (mypage->byte != NULL) {
 			NS_DBG("erase_sector: freeing page %d\n", ns->regs.row+i);
 			kmem_cache_free(ns->nand_pages_slab, mypage->byte);
 			mypage->byte = NULL;
 		}
 		mypage++;
 	}
+	BUG_ON(poweroff_err);
 }
 
 /*
@@ -1553,6 +1660,33 @@ static int prog_page(struct nandsim *ns, int num)
 	int i;
 	union ns_mem *mypage;
 	u_char *pg_off;
+	int poweroff_err;
+
+	/*
+	 * Corrupt the page if a poweroff occurs in the middle of the program
+	 * operation
+	 */
+	poweroff_err = poweroff_error(ns);
+	if (poweroff_err) {
+		int paired_page;
+		pr_info("%s:%i\n", __func__, __LINE__);
+		prandom_bytes(ns->buf.byte, ns->geom.pgszoob);
+		paired_page = get_paired_page(ns);
+		if (paired_page >= 0) {
+			loff_t pos = (loff_t)paired_page * ns->geom.pgszoob;
+			write_file(ns, ns->cfile, ns->file_buf, ns->geom.pgszoob, pos);
+			__set_bit(paired_page, ns->pages_written);
+			if (ns->cstatusfile) {
+				pos = paired_page / BITS_PER_LONG;
+				write_file(ns, ns->cstatusfile,
+					   ns->pages_written + pos,
+					   sizeof(unsigned long),
+					   pos * sizeof(unsigned long));
+			}
+			prandom_bytes(ns->buf.byte, ns->geom.pgszoob);
+			pr_info("corrupting pages %d and %d\n", ns->regs.row, paired_page);
+		}
+	}
 
 	if (ns->cfile) {
 		loff_t off;
@@ -1583,6 +1717,13 @@ static int prog_page(struct nandsim *ns, int num)
 				return -1;
 			}
 			__set_bit(ns->regs.row, ns->pages_written);
+			if (ns->cstatusfile) {
+				pos = ns->regs.row / BITS_PER_LONG;
+				write_file(ns, ns->cstatusfile,
+					   ns->pages_written + pos,
+					   sizeof(unsigned long),
+					   pos * sizeof(unsigned long));
+			}
 		} else {
 			tx = write_file(ns, ns->cfile, pg_off, num, off);
 			if (tx != num) {
@@ -1590,6 +1731,8 @@ static int prog_page(struct nandsim *ns, int num)
 				return -1;
 			}
 		}
+
+		BUG_ON(poweroff_err);
 		return 0;
 	}
 
@@ -1613,6 +1756,8 @@ static int prog_page(struct nandsim *ns, int num)
 	pg_off = NS_PAGE_BYTE_OFF(ns);
 	for (i = 0; i < num; i++)
 		pg_off[i] &= ns->buf.byte[i];
+
+	BUG_ON(poweroff_err);
 
 	return 0;
 }
@@ -2352,6 +2497,7 @@ static int __init ns_init_module(void)
 		NS_INFO("using %u-bit/%u bytes BCH ECC\n", bch, chip->ecc.size);
 	}
 
+	nand->is_mlc = !nand_is_slc(chip);
 	retval = nand_scan_tail(nsmtd);
 	if (retval) {
 		NS_ERR("can't register NAND Simulator\n");
