@@ -162,7 +162,8 @@ struct ubi_ec_hdr {
 	__be32  vid_hdr_offset;
 	__be32  data_offset;
 	__be32  image_seq;
-	__u8    padding2[32];
+	__be32	fm_pnum;
+	__u8    padding2[28];
 	__be32  hdr_crc;
 } __packed;
 
@@ -510,4 +511,29 @@ struct ubi_fm_eba {
 	__be32 reserved_pebs;
 	__be32 pnum[0];
 } __packed;
+
+/* -------------------------------- */
+
+struct ubi_fm_ec_record {
+	__be32 pnum;
+	__be32 ec;
+} __packed;
+
+struct ubi_fm_leb_record {
+	__be32 vol_id;
+	__be32 lnum;
+	__be32 new_pnum;
+	__be32 old_pnum;
+} __packed;
+
+struct ubi_fm_vtbl_record {
+	__be32 pnum;
+} __packed;
+
+struct ubi_fm_record {
+	__be32 magic;
+	__be32 pnum;
+	__be64 seqnum;
+} __packed;
+
 #endif /* !__UBI_MEDIA_H__ */

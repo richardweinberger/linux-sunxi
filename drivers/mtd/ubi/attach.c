@@ -817,7 +817,8 @@ out_unlock:
  * successfully handled and a negative error code in case of failure.
  */
 static int scan_peb(struct ubi_device *ubi, struct ubi_attach_info *ai,
-		    int pnum, int *vid, unsigned long long *sqnum)
+		    int pnum, int *vid, unsigned long long *sqnum,
+		    int *fm_pnum)
 {
 	long long uninitialized_var(ec);
 	int err, bitflips = 0, vol_id = -1, ec_err = 0;
@@ -912,6 +913,9 @@ static int scan_peb(struct ubi_device *ubi, struct ubi_attach_info *ai,
 			ubi_dump_ec_hdr(ech);
 			return -EINVAL;
 		}
+
+		if (fm_pnum)
+			*fm_pnum = be32_to_cpu(ech->fm_pnum);
 	}
 
 	/* OK, we've done with the EC header, let's look at the VID header */
@@ -1247,7 +1251,7 @@ static int scan_all(struct ubi_device *ubi, struct ubi_attach_info *ai,
 		cond_resched();
 
 		dbg_gen("process PEB %d", pnum);
-		err = scan_peb(ubi, ai, pnum, NULL, NULL);
+		err = scan_peb(ubi, ai, pnum, NULL, NULL, NULL);
 		if (err < 0)
 			goto out_vidh;
 	}
@@ -1325,6 +1329,70 @@ static struct ubi_attach_info *alloc_ai(void)
 	return ai;
 }
 
+static int ubi_fm_find_sb(struct ubi_device *ubi, struct ubi_attach_info *ai)
+{
+	int err, pnum, fm_anchor = -1;
+	unsigned long long max_sqnum = 0;
+	unsigned long *scanned;
+	int pos = 0, orig = -1;
+
+	err = -ENOMEM;
+
+	scanned = kzalloc(DIV_ROUND_UP(ubi->peb_count, BITS_PER_LONG),
+			  GFP_KERNEL);
+	if (!scanned)
+		goto out;
+
+	ech = kzalloc(ubi->ec_hdr_alsize, GFP_KERNEL);
+	if (!ech)
+		goto out;
+
+	vidh = ubi_zalloc_vid_hdr(ubi, GFP_KERNEL);
+	if (!vidh)
+		goto out;
+
+	while (pos < ubi->peb_count) {
+		int vol_id = -1;
+		unsigned long long sqnum = -1;
+		int fm_pnum = -1;
+		cond_resched();
+
+		err = scan_peb(ubi, ai, pnum, &vol_id, &sqnum, &fm_pnum);
+		if (err)
+			goto out;
+
+		set_bit(pos, scanned);
+
+		if (vol_id == UBI_FM_SB_VOLUME_ID && sqnum > max_sqnum) {
+			max_sqnum = sqnum;
+			fm_anchor = pnum;
+			/* TODO: handle duplicate SB LEBs */
+
+			return ubi_scan_fastmap(ubi, ai, fm_anchor);
+		} else if (fm_pnum > 0 && fm_pnum < ubi->peb_count &&
+			   !test_bit(fm_pnum, scanned)) {
+			if (orig < 0)
+				orig = pos;
+
+			pos = fm_pnum;
+		} else {
+			if (orig >= 0) {
+				pos = orig;
+				orig = -1;
+			}
+
+			pos = find_next_zero_bit(scanned, ubi->peb_count, pos);
+		}
+	}
+
+out:
+	ubi_free_vid_hdr(ubi, vidh);
+	kfree(ech);
+	kfree(scanned);
+
+	return err;
+}
+
 #ifdef CONFIG_MTD_UBI_FASTMAP
 
 /**
@@ -1358,7 +1426,7 @@ static int scan_fast(struct ubi_device *ubi, struct ubi_attach_info **ai)
 		cond_resched();
 
 		dbg_gen("process PEB %d", pnum);
-		err = scan_peb(ubi, *ai, pnum, &vol_id, &sqnum);
+		err = scan_peb(ubi, *ai, pnum, &vol_id, &sqnum, NULL);
 		if (err < 0)
 			goto out_vidh;
 

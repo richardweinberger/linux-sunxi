@@ -855,6 +855,9 @@ int ubi_io_write_ec_hdr(struct ubi_device *ubi, int pnum,
 	crc = crc32(UBI_CRC32_INIT, ec_hdr, UBI_EC_HDR_SIZE_CRC);
 	ec_hdr->hdr_crc = cpu_to_be32(crc);
 
+	if (ubi->fm && ubi->fm->e[0])
+		ec_hdr->fm_pnum = ubi->fm->e[0]->pnum;
+
 	err = self_check_ec_hdr(ubi, pnum, ec_hdr);
 	if (err)
 		return err;
