@@ -415,6 +415,7 @@ static int tmio_probe(struct platform_device *dev)
 	nand_chip->ecc.hwctl = tmio_nand_enable_hwecc;
 	nand_chip->ecc.calculate = tmio_nand_calculate_ecc;
 	nand_chip->ecc.correct = tmio_nand_correct_data;
+	nand_chip->ecc.options |= NAND_ECC_DISABLE_ERASED_CHECK;
 
 	if (data)
 		nand_chip->badblock_pattern = data->badblock_pattern;

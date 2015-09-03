@@ -1419,7 +1419,8 @@ static int nand_read_subpage(struct mtd_info *mtd, struct nand_chip *chip,
 
 		stat = chip->ecc.correct(mtd, p,
 			&chip->buffers->ecccode[i], &chip->buffers->ecccalc[i]);
-		if (stat == -EBADMSG) {
+		if (stat == -EBADMSG &&
+		    !(chip->ecc.options & NAND_ECC_DISABLE_ERASED_CHECK)) {
 			/* check for empty pages with bitflips */
 			stat = nand_check_erased_ecc_chunk(p, chip->ecc.size,
 						&chip->buffers->ecccode[i],
@@ -1477,7 +1478,8 @@ static int nand_read_page_hwecc(struct mtd_info *mtd, struct nand_chip *chip,
 		int stat;
 
 		stat = chip->ecc.correct(mtd, p, &ecc_code[i], &ecc_calc[i]);
-		if (stat == -EBADMSG) {
+		if (stat == -EBADMSG &&
+		    !(chip->ecc.options & NAND_ECC_DISABLE_ERASED_CHECK)) {
 			/* check for empty pages with bitflips */
 			stat = nand_check_erased_ecc_chunk(p, eccsize,
 						&ecc_code[i], eccbytes,
@@ -1537,7 +1539,8 @@ static int nand_read_page_hwecc_oob_first(struct mtd_info *mtd,
 		chip->ecc.calculate(mtd, p, &ecc_calc[i]);
 
 		stat = chip->ecc.correct(mtd, p, &ecc_code[i], NULL);
-		if (stat == -EBADMSG) {
+		if (stat == -EBADMSG &&
+		    !(chip->ecc.options & NAND_ECC_DISABLE_ERASED_CHECK)) {
 			/* check for empty pages with bitflips */
 			stat = nand_check_erased_ecc_chunk(p, eccsize,
 						&ecc_code[i], eccbytes,
@@ -1600,7 +1603,8 @@ static int nand_read_page_syndrome(struct mtd_info *mtd, struct nand_chip *chip,
 			oob += chip->ecc.postpad;
 		}
 
-		if (stat == -EBADMSG) {
+		if (stat == -EBADMSG &&
+		    !(chip->ecc.options & NAND_ECC_DISABLE_ERASED_CHECK)) {
 			/* check for empty pages with bitflips */
 			stat = nand_check_erased_ecc_chunk(p, chip->ecc.size,
 							   oob - eccstepsize,
@@ -4298,6 +4302,14 @@ int nand_scan_tail(struct mtd_info *mtd)
 		ecc->read_oob_raw = ecc->read_oob;
 	if (!ecc->write_oob_raw)
 		ecc->write_oob_raw = ecc->write_oob;
+
+	/*
+	 * The software implementation does not need the the erased check
+	 * since they already generate ff pattern for an erased page.
+	 */
+	if (ecc->correct == nand_bch_correct_data ||
+	    ecc->correct == nand_correct_data)
+		ecc->options |= NAND_ECC_DISABLE_ERASED_CHECK;
 
 	/*
 	 * The number of bytes available for a client to place data into

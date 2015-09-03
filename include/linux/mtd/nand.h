@@ -128,6 +128,13 @@ typedef enum {
 #define NAND_ECC_WRITE		1
 /* Enable Hardware ECC before syndrome is read back from flash */
 #define NAND_ECC_READSYN	2
+/*
+ * Disable NAND 'page erased' check. In any case, this check is only done when
+ * ecc.correct() returns -EBADMSG.
+ * Set this flag if your implementation is able to fix bitflips in erased
+ * pages.
+ */
+#define NAND_ECC_DISABLE_ERASED_CHECK	BIT(1)
 
 /* Bit mask for flags passed to do_nand_read_ecc */
 #define NAND_GET_DEVICE		0x80
@@ -500,6 +507,7 @@ struct nand_ecc_ctrl {
 	int strength;
 	int prepad;
 	int postpad;
+	unsigned int options;
 	struct nand_ecclayout	*layout;
 	void *priv;
 	void (*hwctl)(struct mtd_info *mtd, int mode);

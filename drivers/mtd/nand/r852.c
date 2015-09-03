@@ -876,6 +876,7 @@ static int  r852_probe(struct pci_dev *pci_dev, const struct pci_device_id *id)
 	chip->ecc.hwctl = r852_ecc_hwctl;
 	chip->ecc.calculate = r852_ecc_calculate;
 	chip->ecc.correct = r852_ecc_correct;
+	chip->ecc.options |= NAND_ECC_DISABLE_ERASED_CHECK;
 
 	/* TODO: hack */
 	chip->ecc.read_oob = r852_read_oob;
