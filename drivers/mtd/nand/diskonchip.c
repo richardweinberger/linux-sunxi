@@ -936,37 +936,9 @@ static int doc200x_correct_data(struct mtd_info *mtd, u_char *dat,
 				calc_ecc[i] = ReadDOC_(docptr, DoC_Mplus_ECCSyndrome0 + i);
 			else
 				calc_ecc[i] = ReadDOC_(docptr, DoC_ECCSyndrome0 + i);
-			if (calc_ecc[i] != empty_read_syndrome[i])
-				emptymatch = 0;
 		}
-		/* If emptymatch=1, the read syndrome is consistent with an
-		   all-0xff data and stored ecc block.  Check the stored ecc. */
-		if (emptymatch) {
-			for (i = 0; i < 6; i++) {
-				if (read_ecc[i] == 0xff)
-					continue;
-				emptymatch = 0;
-				break;
-			}
-		}
-		/* If emptymatch still =1, check the data block. */
-		if (emptymatch) {
-			/* Note: this somewhat expensive test should not be triggered
-			   often.  It could be optimized away by examining the data in
-			   the readbuf routine, and remembering the result. */
-			for (i = 0; i < 512; i++) {
-				if (dat[i] == 0xff)
-					continue;
-				emptymatch = 0;
-				break;
-			}
-		}
-		/* If emptymatch still =1, this is almost certainly a freshly-
-		   erased block, in which case the ECC will not come out right.
-		   We'll suppress the error and tell the caller everything's
-		   OK.  Because it is. */
-		if (!emptymatch)
-			ret = doc_ecc_decode(rs_decoder, dat, calc_ecc);
+
+		ret = doc_ecc_decode(rs_decoder, dat, calc_ecc);
 		if (ret > 0)
 			printk(KERN_ERR "doc200x_correct_data corrected %d errors\n", ret);
 	}
