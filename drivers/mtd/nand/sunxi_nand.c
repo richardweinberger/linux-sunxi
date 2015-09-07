@@ -315,7 +315,18 @@ static irqreturn_t sunxi_nfc_interrupt(int irq, void *dev_id)
 static int sunxi_nfc_wait_int(struct sunxi_nfc *nfc, u32 flags,
 			      unsigned int timeout_ms)
 {
+	u32 status;
+	int ret;
 	init_completion(&nfc->complete);
+
+	ret = readl_poll_timeout(nfc->regs + NFC_REG_ST, status,
+				 (status & flags) != flags, 1,
+				 timeout_ms * 1000);
+
+	writel(status & NFC_INT_MASK, nfc->regs + NFC_REG_ST);
+
+	return ret;
+
 
 	writel(flags, nfc->regs + NFC_REG_INT);
 
