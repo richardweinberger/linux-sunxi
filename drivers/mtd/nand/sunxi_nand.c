@@ -972,7 +972,7 @@ static int sunxi_nfc_hw_ecc_write_page(struct mtd_info *mtd,
 		int data_off = i * ecc->size;
 		int oob_off = i * (ecc->bytes + 4);
 		const u8 *data = buf + data_off;
-		const u8 *oob = oob_required ? chip->oob_poi + oob_off : NULL;
+		const u8 *oob = chip->oob_poi + oob_off;
 
 		ret = sunxi_nfc_hw_ecc_write_chunk(mtd, data, data_off, oob,
 						   oob_off + mtd->writesize,
@@ -1040,8 +1040,7 @@ static int sunxi_nfc_hw_syndrome_ecc_read_page(struct mtd_info *mtd,
 		int data_off = i * (ecc->size + ecc->bytes + 4);
 		int oob_off = data_off + ecc->size;
 		u8 *data = buf + (i * ecc->size);
-		u8 *oob = oob_required ?
-			  chip->oob_poi + (i * (ecc->bytes + 4)) : NULL;
+		u8 *oob = chip->oob_poi + (i * (ecc->bytes + 4));
 
 		ret = sunxi_nfc_hw_ecc_read_chunk(mtd, data, data_off, oob,
 						  oob_off, &cur_off, !i,
@@ -1076,8 +1075,7 @@ static int sunxi_nfc_hw_syndrome_ecc_write_page(struct mtd_info *mtd,
 		int data_off = i * (ecc->size + ecc->bytes + 4);
 		int oob_off = data_off + ecc->size;
 		const u8 *data = buf + (i * ecc->size);
-		const u8 *oob = oob_required ?
-				chip->oob_poi + (i * (ecc->bytes + 4)) : NULL;
+		const u8 *oob = chip->oob_poi + (i * (ecc->bytes + 4));
 
 		ret = sunxi_nfc_hw_ecc_write_chunk(mtd, data, data_off,
 						   oob, oob_off,
