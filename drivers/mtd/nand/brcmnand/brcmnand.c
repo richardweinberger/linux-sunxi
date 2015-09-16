@@ -1531,7 +1531,7 @@ static int brcmnand_read_subpage(struct mtd_info *mtd, struct nand_chip *chip,
 	struct brcmnand_host *host = chip->priv;
 
 	return brcmnand_read(mtd, chip, host->last_addr + data_offs,
-			readlen >> FC_SHIFT, (u32 *)bufpoi, NULL);
+			readlen >> FC_SHIFT, (u32 *)(bufpoi + data_offs), NULL);
 }
 
 static int brcmnand_write(struct mtd_info *mtd, struct nand_chip *chip,
@@ -1934,6 +1934,7 @@ static int brcmnand_init_cs(struct brcmnand_host *host)
 		return -ENXIO;
 
 	chip->options |= NAND_NO_SUBPAGE_WRITE;
+	chip->options |= NAND_SUBPAGE_READ;
 	/*
 	 * Avoid (for instance) kmap()'d buffers from JFFS2, which we can't DMA
 	 * to/from, and have nand_base pass us a bounce buffer instead, as
