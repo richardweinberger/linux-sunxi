@@ -301,10 +301,10 @@ static int sunxi_nfc_wait_int(struct sunxi_nfc *nfc, u32 flags,
 	init_completion(&nfc->complete);
 
 	ret = readl_poll_timeout(nfc->regs + NFC_REG_ST, status,
-				 (status & flags) != flags, 1,
+				 (status & flags) == flags, 1,
 				 timeout_ms * 1000);
 
-	writel(status & NFC_INT_MASK, nfc->regs + NFC_REG_ST);
+	writel(flags & NFC_INT_MASK, nfc->regs + NFC_REG_ST);
 
 	return ret;
 
