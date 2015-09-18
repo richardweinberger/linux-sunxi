@@ -39,7 +39,7 @@
 #include <linux/dmaengine.h>
 #include <linux/gpio.h>
 #include <linux/interrupt.h>
-#include <linux/io.h>
+#include <linux/iopoll.h>
 
 #define NFC_REG_CTL		0x0000
 #define NFC_REG_ST		0x0004
